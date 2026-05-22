@@ -1568,6 +1568,156 @@ function Window:Pulse(seconds)
     end
 end
 
+function MatchaGUI:Demo(opts)
+    opts = opts or {}
+
+    local gui = MatchaGUI.Create({
+        Title = opts.Title or "cloud - preview",
+        Width = opts.Width or 485,
+        Height = opts.Height or 630,
+        ToggleKey = opts.ToggleKey or 0x70,
+        ConfigFolder = opts.ConfigFolder,
+    })
+
+    gui:Tab("Legit")
+    gui:Tab("Ragebot")
+    gui:Tab("Visuals")
+    gui:Tab("Misc")
+    local settings = gui:Tab("Settings")
+
+    local configStatus
+    local configDropdown
+
+    local function safeText(value)
+        return asText(value)
+    end
+
+    local function configName()
+        local name = safeText(gui:GetValue("config_name"))
+        if not name or name == "" then
+            return "default"
+        end
+        return name
+    end
+
+    local function setStatus(text)
+        text = safeText(text)
+        if configStatus then
+            configStatus.label = text
+        end
+        print(text)
+    end
+
+    local function selectedConfigName()
+        if configDropdown then
+            local selected = safeText(configDropdown:GetText())
+            if selected and selected ~= "" then
+                return selected
+            end
+        end
+        return configName()
+    end
+
+    local function selectConfig(name)
+        if not configDropdown then return end
+        local items = configDropdown:GetItems()
+        for i, item in ipairs(items) do
+            if item == name then
+                configDropdown:SetValue(i - 1)
+                return
+            end
+        end
+    end
+
+    local function refreshStatus()
+        local configs = gui:ListConfigs()
+        if configDropdown then
+            configDropdown:SetItems(configs)
+        end
+        if #configs == 0 then
+            setStatus("No configs saved")
+        else
+            setStatus("Selected: " .. selectedConfigName())
+        end
+    end
+
+    local createConfigs = settings:Section("Create Configs", "Left")
+    createConfigs:InputText("config_name", "Name", "", nil, { skipConfig = true })
+    createConfigs:Button("Create", function()
+        local name = configName()
+        local ok, msg = gui:SaveConfig(name)
+        if ok then
+            setStatus("Saved config: " .. msg)
+            refreshStatus()
+            selectConfig(name)
+        else
+            setStatus("Save failed: " .. tostring(msg))
+        end
+    end)
+
+    local configSettings = settings:Section("Config Settings", "Left")
+    configDropdown = configSettings:Combo("selected_config", "Saved Configs", {}, 0, function(index, text)
+        text = safeText(text)
+        if text and text ~= "" then
+            gui:SetValue("config_name", text)
+            setStatus("Selected: " .. text)
+        end
+    end, { skipConfig = true })
+    configStatus = configSettings:Text("No configs saved")
+    configSettings:Button("Load", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:LoadConfig(name)
+        if ok then
+            setStatus("Loaded config: " .. name)
+        else
+            setStatus("Load failed: " .. tostring(msg))
+        end
+    end)
+    configSettings:Button("Update", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:SaveConfig(name)
+        if ok then
+            setStatus("Updated config: " .. msg)
+            refreshStatus()
+            selectConfig(name)
+        else
+            setStatus("Update failed: " .. tostring(msg))
+        end
+    end)
+    configSettings:Button("Delete", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:DeleteConfig(name)
+        if ok then
+            setStatus("Deleted config: " .. msg)
+            refreshStatus()
+        else
+            setStatus("Delete failed: " .. tostring(msg))
+        end
+    end)
+    configSettings:Button("Refresh", function()
+        refreshStatus()
+    end)
+
+    local uiSettings = settings:Section("UI Settings", "Right")
+    uiSettings:InputText("menu_title", "Menu Title", "cloud")
+    uiSettings:InputText("domain", "Domain", "cloud")
+    uiSettings:ColorPicker("domain_accent", "Domain Accent", 255, 255, 255)
+    uiSettings:ColorPicker("menu_accent", "Menu Accent", 255, 255, 255)
+
+    local other = settings:Section("Other", "Right")
+    other:Toggle("show_keybinds", "Show Keybinds", false)
+    other:MenuKeybind("menu_key", "Menu Key", 0x70)
+
+    gui:SetTab("Settings")
+    refreshStatus()
+
+    if opts.Start ~= false then
+        gui:Start()
+    end
+
+    return gui
+end
+
 MatchaGUI.KeyName = keyName
 MatchaGUI.Theme = DEFAULT_THEME
 
