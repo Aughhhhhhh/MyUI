@@ -1744,6 +1744,10 @@ function MatchaGUI:Demo(opts)
     return gui
 end
 
+function MatchaGUI:ShowDemoMenu(opts)
+    return self:Demo(opts)
+end
+
 MatchaGUI.KeyName = keyName
 MatchaGUI.Theme = DEFAULT_THEME
 
