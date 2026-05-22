@@ -59,6 +59,11 @@ local KEY_SCAN = {
     0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
 }
 
+local TEXT_BLOCK_KEYS = {
+    0x20, 0x25, 0x26, 0x27, 0x28,
+    0x41, 0x44, 0x53, 0x57,
+}
+
 local DEFAULT_THEME = {
     bg = Color3_fromRGB(12, 12, 12),
     panel = Color3_fromRGB(20, 20, 20),
@@ -118,6 +123,20 @@ local function readKey(vk)
     if not vk or not iskeypressed then return false end
     local ok, down = pcall(iskeypressed, vk)
     return ok and down == true
+end
+
+local function releaseKey(vk)
+    if not vk or not keyrelease then return false end
+    local ok = pcall(keyrelease, vk)
+    return ok == true
+end
+
+local function releaseTextBlockKeys()
+    for _, vk in ipairs(TEXT_BLOCK_KEYS) do
+        if readKey(vk) then
+            releaseKey(vk)
+        end
+    end
 end
 
 local function charFromKey(vk)
@@ -1015,6 +1034,7 @@ function Window:_handleHotkeys()
                 widget.callback(value, widget)
             end
         end
+        releaseTextBlockKeys()
         return
     end
 
