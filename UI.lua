@@ -1735,10 +1735,23 @@ function MatchaGUI:Demo(opts)
         gui:Start()
     end
 
+    if opts.Start ~= false and opts.Block ~= false then
+        while not gui._destroyed do
+            task.wait(60)
+        end
+    end
+
     return gui
 end
 
 MatchaGUI.KeyName = keyName
 MatchaGUI.Theme = DEFAULT_THEME
+
+cloud = MatchaGUI
+Cloud = MatchaGUI
+CloudUI = MatchaGUI
+_G.cloud = MatchaGUI
+_G.Cloud = MatchaGUI
+_G.CloudUI = MatchaGUI
 
 return MatchaGUI
