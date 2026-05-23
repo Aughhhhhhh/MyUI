@@ -1,0 +1,1992 @@
+-- VenusGUI
+-- Drawing-based GUI for Matcha LuaVM scripts.
+-- Same architecture as MatchaGUI (config save/load, keybinds, slider editing,
+-- dragging, hotkeys), restyled to match the Venus Library look.
+
+local VenusGUI = {}
+
+local Drawing_new = Drawing.new
+local Vector2_new = Vector2.new
+local Color3_fromRGB = Color3.fromRGB
+local math_floor = math.floor
+local math_max = math.max
+local math_min = math.min
+local string_format = string.format
+local os_clock = os.clock
+
+local FONT = Drawing.Fonts.Monospace
+pcall(function() FONT = Drawing.Fonts.System end)
+local FONT_BOLD = FONT
+pcall(function() FONT_BOLD = Drawing.Fonts.SystemBold end)
+
+local KEY_NAMES = {
+    [0x01] = "LMB",
+    [0x02] = "RMB",
+    [0x08] = "Back",
+    [0x09] = "Tab",
+    [0x0D] = "Enter",
+    [0x10] = "Shift",
+    [0x11] = "Ctrl",
+    [0x12] = "Alt",
+    [0x14] = "Caps",
+    [0x1B] = "Esc",
+    [0x20] = "Space",
+    [0x2D] = "Insert",
+    [0x2E] = "Delete",
+    [0x6B] = "Num+",
+    [0x6D] = "Num-",
+    [0x6E] = "Num.",
+    [0xBB] = "+",
+    [0xBD] = "-",
+    [0xBE] = ".",
+    [0x70] = "F1", [0x71] = "F2", [0x72] = "F3", [0x73] = "F4",
+    [0x74] = "F5", [0x75] = "F6", [0x76] = "F7", [0x77] = "F8",
+    [0x78] = "F9", [0x79] = "F10", [0x7A] = "F11", [0x7B] = "F12",
+}
+
+for i = 0x41, 0x5A do KEY_NAMES[i] = string.char(i) end
+for i = 0x30, 0x39 do KEY_NAMES[i] = string.char(i) end
+for i = 0x60, 0x69 do KEY_NAMES[i] = "Num" .. tostring(i - 0x60) end
+
+local KEY_SCAN = {
+    0x08, 0x09, 0x0D, 0x10, 0x11, 0x12, 0x14, 0x1B, 0x20, 0x2D, 0x2E,
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D,
+    0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A,
+    0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6B, 0x6D, 0x6E,
+    0xBB, 0xBD, 0xBE,
+    0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
+}
+
+local TEXT_BLOCK_KEYS = {
+    0x20, 0x25, 0x26, 0x27, 0x28,
+    0x41, 0x44, 0x53, 0x57,
+}
+
+local DEFAULT_THEME = {
+    bg          = Color3_fromRGB(24, 24, 24),
+    card        = Color3_fromRGB(32, 32, 32),
+    panel       = Color3_fromRGB(38, 38, 38),
+    panel2      = Color3_fromRGB(48, 48, 48),
+    hover       = Color3_fromRGB(58, 58, 58),
+    stroke      = Color3_fromRGB(60, 60, 60),
+    stroke2     = Color3_fromRGB(80, 80, 80),
+    text        = Color3_fromRGB(235, 235, 235),
+    muted       = Color3_fromRGB(155, 155, 155),
+    accent      = Color3_fromRGB(201, 148, 160),
+    accent2     = Color3_fromRGB(220, 175, 188),
+    danger      = Color3_fromRGB(220, 70, 70),
+    control     = Color3_fromRGB(50, 50, 50),
+    control2    = Color3_fromRGB(40, 40, 40),
+    white       = Color3_fromRGB(255, 255, 255),
+    shadow      = Color3_fromRGB(0, 0, 0),
+}
+
+local COLOR_PALETTE = {
+    Color3_fromRGB(255, 105, 180),
+    Color3_fromRGB(220, 70, 70),
+    Color3_fromRGB(43, 214, 158),
+    Color3_fromRGB(255, 210, 84),
+    Color3_fromRGB(110, 160, 255),
+    Color3_fromRGB(255, 255, 255),
+}
+
+local function copyTheme(overrides)
+    local theme = {}
+    for k, v in pairs(DEFAULT_THEME) do theme[k] = v end
+    if overrides then
+        for k, v in pairs(overrides) do theme[k] = v end
+    end
+    return theme
+end
+
+local function clamp(v, a, b)
+    if v < a then return a end
+    if v > b then return b end
+    return v
+end
+
+local function inside(mx, my, x, y, w, h)
+    return mx >= x and mx <= x + w and my >= y and my <= y + h
+end
+
+local function keyName(vk)
+    if type(vk) ~= "number" then vk = 0 end
+    return KEY_NAMES[vk] or ("0x" .. string_format("%X", vk or 0))
+end
+
+local function readKey(vk)
+    if not vk or not iskeypressed then return false end
+    local ok, down = pcall(iskeypressed, vk)
+    return ok and down == true
+end
+
+local function releaseKey(vk)
+    if not vk or not keyrelease then return false end
+    local ok = pcall(keyrelease, vk)
+    return ok == true
+end
+
+local function releaseTextBlockKeys()
+    for _, vk in ipairs(TEXT_BLOCK_KEYS) do
+        if readKey(vk) then releaseKey(vk) end
+    end
+end
+
+local function charFromKey(vk)
+    if vk >= 0x41 and vk <= 0x5A then
+        if readKey(0x10) then return string.char(vk) end
+        return string.char(vk + 32)
+    end
+    if vk >= 0x30 and vk <= 0x39 then return string.char(vk) end
+    if vk >= 0x60 and vk <= 0x69 then return tostring(vk - 0x60) end
+    if vk == 0x6E or vk == 0xBE then return "." end
+    if vk == 0x6D or vk == 0xBD then return "-" end
+    if vk == 0x6B or vk == 0xBB then return "+" end
+    if vk == 0x20 then return " " end
+    return nil
+end
+
+local function numericCharFromKey(vk)
+    if vk >= 0x30 and vk <= 0x39 then return string.char(vk) end
+    if vk >= 0x60 and vk <= 0x69 then return tostring(vk - 0x60) end
+    if vk == 0x6E or vk == 0xBE then return "." end
+    if vk == 0x6D or vk == 0xBD then return "-" end
+    if vk == 0x6B or vk == 0xBB then return "+" end
+    return nil
+end
+
+local function readMouseDown()
+    if not ismouse1pressed then return false end
+    local ok, down = pcall(ismouse1pressed)
+    return ok and down == true
+end
+
+local function readMouse2Down()
+    if not ismouse2pressed then return false end
+    local ok, down = pcall(ismouse2pressed)
+    return ok and down == true
+end
+
+local function robloxActive()
+    if not isrbxactive then return true end
+    local ok, active = pcall(isrbxactive)
+    if not ok then return true end
+    return active == true
+end
+
+local function asText(value)
+    local valueType = type(value)
+    if valueType == "string" then return value end
+    if valueType == "number" or valueType == "boolean" then return tostring(value) end
+    return ""
+end
+
+local function asNumber(value, fallback)
+    if type(value) == "number" then return value end
+    return fallback
+end
+
+local function sliderLimits(widget)
+    local minValue = asNumber(widget.min, 0)
+    local maxValue = asNumber(widget.max, minValue + 1)
+    if maxValue <= minValue then maxValue = minValue + 1 end
+    return minValue, maxValue
+end
+
+local function normalizeSliderValue(widget, value)
+    value = tonumber(value)
+    if not value then return nil end
+    local minValue, maxValue = sliderLimits(widget)
+    local nextValue = clamp(value, minValue, maxValue)
+    local step = widget.step or 1
+    if step > 0 then
+        nextValue = math_floor((nextValue / step) + 1 / 2) * step
+    end
+    nextValue = clamp(nextValue, minValue, maxValue)
+    if widget.format == "%d" then
+        nextValue = math_floor(nextValue + 1 / 2)
+    end
+    return nextValue
+end
+
+local function formatSliderValue(widget, value)
+    local ok, text = pcall(string_format, widget.format or "%.2f", value)
+    if ok then return text end
+    return tostring(value)
+end
+
+local function applySliderValue(window, widget, value)
+    local nextValue = normalizeSliderValue(widget, value)
+    if nextValue == nil then return false end
+    if nextValue ~= widget.value then
+        widget.value = nextValue
+        window._values[widget.id] = nextValue
+        if widget.callback then widget.callback(nextValue, widget) end
+    else
+        window._values[widget.id] = nextValue
+    end
+    return true, nextValue
+end
+
+local function normalizeItems(items)
+    local out = {}
+    if type(items) ~= "table" then return out end
+    for _, item in ipairs(items) do
+        local text = asText(item)
+        if text ~= "" then table.insert(out, text) end
+    end
+    return out
+end
+
+local function cleanName(name)
+    name = asText(name)
+    name = name:gsub("^%s+", ""):gsub("%s+$", "")
+    name = name:gsub("[^%w _%-]", "_")
+    if name == "" then return "default" end
+    return name
+end
+
+local function joinPath(a, b)
+    if not a or a == "" then return b end
+    return a .. "/" .. b
+end
+
+local function stripExt(name)
+    return (name:gsub("%.json$", ""):gsub("%.cfg$", ""))
+end
+
+local function fileName(path)
+    path = tostring(path or ""):gsub("\\", "/")
+    return path:match("([^/]+)$") or path
+end
+
+local function ensureFolderPath(path)
+    if not path or path == "" then return false, "missing folder" end
+    if not isfolder or not makefolder then return false, "filesystem unavailable" end
+    local built = ""
+    for part in string.gmatch(path:gsub("\\", "/"), "[^/]+") do
+        built = joinPath(built, part)
+        local okFolder, exists = pcall(isfolder, built)
+        if not okFolder then return false, "isfolder failed" end
+        if exists ~= true then
+            local okMake = pcall(makefolder, built)
+            if not okMake then return false, "makefolder failed" end
+        end
+    end
+    return true
+end
+
+local function getHttpService()
+    local ok, http = pcall(function() return game:GetService("HttpService") end)
+    if ok and http then return http end
+    return nil
+end
+
+local function isColor(value)
+    if value == nil then return false end
+    local valueType = type(value)
+    if valueType == "boolean" or valueType == "number" or valueType == "string" then
+        return false
+    end
+    local ok, r, g, b = pcall(function() return value.R, value.G, value.B end)
+    return ok and r ~= nil and g ~= nil and b ~= nil
+end
+
+local function encodeValue(widget)
+    if widget.skipConfig then return nil end
+    if widget.kind == "button" or widget.kind == "text" then return nil end
+    if widget.kind == "keybind" then
+        return { type = "keybind", key = widget.key, active = widget.value == true }
+    end
+    if widget.kind == "menu_keybind" then
+        return { type = "menu_keybind", key = widget.key or widget.value }
+    end
+    if widget.kind == "toggle_keybind" then
+        return {
+            type = "toggle_keybind",
+            value = widget.value == true,
+            key = widget.key,
+            active = widget.bindActive == true,
+        }
+    end
+    if widget.kind == "color_picker" then
+        if not isColor(widget.value) then return nil end
+        return { type = "color", r = widget.value.R, g = widget.value.G, b = widget.value.B }
+    end
+    if widget.kind == "toggle_color" then
+        local color = widget.color
+        local cr, cg, cb = 1, 1, 1
+        if isColor(color) then cr, cg, cb = color.R, color.G, color.B end
+        return {
+            type = "toggle_color",
+            value = widget.value == true,
+            r = cr, g = cg, b = cb,
+        }
+    end
+    if isColor(widget.value) then
+        return { type = "color", r = widget.value.R, g = widget.value.G, b = widget.value.B }
+    end
+    return { type = widget.kind, value = widget.value }
+end
+
+local function decodeValue(widget, packed)
+    if not packed then return nil, false end
+    if widget.kind == "keybind" then
+        widget.key = asNumber(packed.key, widget.key)
+        return packed.active == true, true
+    end
+    if widget.kind == "menu_keybind" then
+        local key = asNumber(packed.key, asNumber(packed.value, widget.key))
+        return key, key ~= nil
+    end
+    if widget.kind == "toggle_keybind" then
+        widget.key = asNumber(packed.key, widget.key)
+        widget.bindActive = packed.active == true
+        return packed.value == true, true
+    end
+    if widget.kind == "color_picker" then
+        if type(packed.r) == "number" and type(packed.g) == "number" and type(packed.b) == "number" then
+            return Color3.new(packed.r, packed.g, packed.b), true
+        end
+        if isColor(packed.value) then return packed.value, true end
+        return nil, false
+    end
+    if widget.kind == "toggle_color" then
+        if type(packed.r) == "number" and type(packed.g) == "number" and type(packed.b) == "number" then
+            widget.color = Color3.new(packed.r, packed.g, packed.b)
+        end
+        return packed.value == true, true
+    end
+    if widget.kind == "input_text" then
+        if packed.value ~= nil then return asText(packed.value), true end
+        return asText(packed), true
+    end
+    if widget.kind == "combo" then
+        local index = asNumber(packed.value, asNumber(packed, nil))
+        return index, index ~= nil
+    end
+    if packed.value ~= nil then return packed.value, true end
+    return packed, true
+end
+
+-- Drawing helpers ------------------------------------------------------------
+
+local function createDrawing(owner, typ, props)
+    local obj = Drawing_new(typ)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    table.insert(owner._drawings, obj)
+    return obj
+end
+
+local function setVisible(obj, visible)
+    if obj then obj.Visible = visible end
+end
+
+local function removeAll(drawings)
+    for _, obj in ipairs(drawings) do
+        pcall(function() obj:Remove() end)
+    end
+    table.clear(drawings)
+end
+
+local function makeText(owner, text, size, color, z)
+    return createDrawing(owner, "Text", {
+        Text = asText(text),
+        Size = size or 13,
+        Font = FONT,
+        Color = color or owner.theme.text,
+        Center = false,
+        Outline = false,
+        Visible = true,
+        ZIndex = z or 70,
+        Position = Vector2_new(0, 0),
+    })
+end
+
+local function makeBox(owner, color, z)
+    return createDrawing(owner, "Square", {
+        Color = color,
+        Filled = true,
+        Visible = true,
+        Thickness = 1,
+        ZIndex = z or 50,
+        Position = Vector2_new(0, 0),
+        Size = Vector2_new(1, 1),
+    })
+end
+
+local function makeLine(owner, color, z)
+    return createDrawing(owner, "Line", {
+        Color = color,
+        Thickness = 1,
+        Visible = true,
+        ZIndex = z or 51,
+        From = Vector2_new(0, 0),
+        To = Vector2_new(0, 0),
+    })
+end
+
+local function makeFilledCircle(owner, color, z)
+    return createDrawing(owner, "Circle", {
+        Color = color,
+        Filled = true,
+        Visible = true,
+        Thickness = 1,
+        NumSides = 24,
+        ZIndex = z or 50,
+        Position = Vector2_new(0, 0),
+        Radius = 1,
+    })
+end
+
+local function makeOutlineCircle(owner, color, z)
+    return createDrawing(owner, "Circle", {
+        Color = color,
+        Filled = false,
+        Visible = true,
+        Thickness = 1,
+        NumSides = 24,
+        ZIndex = z or 51,
+        Position = Vector2_new(0, 0),
+        Radius = 1,
+    })
+end
+
+-- Rounded rectangle (filled): 2 squares + 4 corner circles ------------------
+
+local function makeRoundedFill(owner, z)
+    return {
+        s1 = makeBox(owner, owner.theme.panel, z),
+        s2 = makeBox(owner, owner.theme.panel, z),
+        c1 = makeFilledCircle(owner, owner.theme.panel, z),
+        c2 = makeFilledCircle(owner, owner.theme.panel, z),
+        c3 = makeFilledCircle(owner, owner.theme.panel, z),
+        c4 = makeFilledCircle(owner, owner.theme.panel, z),
+    }
+end
+
+local function layoutRoundedFill(rf, x, y, w, h, r, color)
+    if w < 2 then w = 2 end
+    if h < 2 then h = 2 end
+    r = math_min(r, math_floor(math_min(w, h) / 2))
+    if r < 1 then r = 1 end
+    rf.s1.Position = Vector2_new(x + r, y)
+    rf.s1.Size = Vector2_new(w - r * 2, h)
+    rf.s2.Position = Vector2_new(x, y + r)
+    rf.s2.Size = Vector2_new(w, h - r * 2)
+    rf.c1.Position = Vector2_new(x + r, y + r); rf.c1.Radius = r
+    rf.c2.Position = Vector2_new(x + w - r, y + r); rf.c2.Radius = r
+    rf.c3.Position = Vector2_new(x + r, y + h - r); rf.c3.Radius = r
+    rf.c4.Position = Vector2_new(x + w - r, y + h - r); rf.c4.Radius = r
+    if color then
+        rf.s1.Color = color; rf.s2.Color = color
+        rf.c1.Color = color; rf.c2.Color = color
+        rf.c3.Color = color; rf.c4.Color = color
+    end
+end
+
+local function setRoundedFillVisible(rf, visible)
+    setVisible(rf.s1, visible); setVisible(rf.s2, visible)
+    setVisible(rf.c1, visible); setVisible(rf.c2, visible)
+    setVisible(rf.c3, visible); setVisible(rf.c4, visible)
+end
+
+-- Rounded border: 4 lines for the flat edges; corners come from a slightly
+-- larger fill rendered behind ------------------------------------------------
+
+local function makeRoundedBorder(owner, z)
+    return {
+        l1 = makeLine(owner, owner.theme.stroke, z),
+        l2 = makeLine(owner, owner.theme.stroke, z),
+        l3 = makeLine(owner, owner.theme.stroke, z),
+        l4 = makeLine(owner, owner.theme.stroke, z),
+    }
+end
+
+local function layoutRoundedBorder(rb, x, y, w, h, r, color)
+    r = math_min(r, math_floor(math_min(w, h) / 2))
+    if r < 1 then r = 1 end
+    rb.l1.From = Vector2_new(x + r, y);     rb.l1.To = Vector2_new(x + w - r, y)
+    rb.l2.From = Vector2_new(x + r, y + h - 1); rb.l2.To = Vector2_new(x + w - r, y + h - 1)
+    rb.l3.From = Vector2_new(x, y + r);     rb.l3.To = Vector2_new(x, y + h - r)
+    rb.l4.From = Vector2_new(x + w - 1, y + r); rb.l4.To = Vector2_new(x + w - 1, y + h - r)
+    if color then
+        rb.l1.Color = color; rb.l2.Color = color
+        rb.l3.Color = color; rb.l4.Color = color
+    end
+end
+
+local function setRoundedBorderVisible(rb, visible)
+    setVisible(rb.l1, visible); setVisible(rb.l2, visible)
+    setVisible(rb.l3, visible); setVisible(rb.l4, visible)
+end
+
+-- Classes --------------------------------------------------------------------
+
+local Window = {}
+Window.__index = Window
+
+local Tab = {}
+Tab.__index = Tab
+
+local Section = {}
+Section.__index = Section
+
+function VenusGUI.Create(opts)
+    opts = opts or {}
+
+    local self = setmetatable({}, Window)
+    self.title = asText(opts.Title or opts.title)
+    if self.title == "" then self.title = "Venus Library" end
+    self.x = opts.X or opts.x or 100
+    self.y = opts.Y or opts.y or 100
+    self.w = opts.Width or opts.width or 380
+    self.h = opts.Height or opts.height or 560
+    self.toggleKey = opts.ToggleKey or opts.toggleKey or 0x70
+    self.configFolder = opts.ConfigFolder or opts.configFolder or joinPath("VenusGUI", cleanName(self.title))
+    self.visible = opts.Visible
+    if self.visible == nil then self.visible = true end
+
+    self.theme = copyTheme(opts.Theme or opts.theme)
+    self._drawings = {}
+    self._tabs = {}
+    self._values = {}
+    self._widgetsById = {}
+    self._activeTab = nil
+    self._mouse = {
+        x = 0, y = 0, px = 0, py = 0,
+        down = false, clicked = false, released = false,
+        rightDown = false, rightClicked = false, rightReleased = false,
+    }
+    self._dragging = false
+    self._dragOffsetX = 0
+    self._dragOffsetY = 0
+    self._activeSlider = nil
+    self._activeText = nil
+    self._activeCombo = nil
+    self._listeningBind = nil
+    self._textLastKeys = {}
+    self._lastToggleKey = false
+    self._running = false
+    self._connection = nil
+    self._destroyed = false
+
+    -- Outer card: bigger rounded fill (border color) behind, smaller fill on top
+    self.cardBorder = makeRoundedFill(self, 40)
+    self.card = makeRoundedFill(self, 41)
+
+    -- Title
+    self.titleText = makeText(self, self.title, 14, self.theme.text, 70)
+    self.titleText.Font = FONT_BOLD
+
+    return self
+end
+
+function Window:Tab(name)
+    local tab = setmetatable({}, Tab)
+    tab.window = self
+    tab.name = name or ("Tab " .. tostring(#self._tabs + 1))
+    tab.sections = {}
+
+    -- Tab pill: rounded fill that lights up only when active
+    tab.pill = makeRoundedFill(self, 50)
+    tab.label = makeText(self, tab.name, 13, self.theme.muted, 70)
+    tab.label.Font = FONT_BOLD
+
+    table.insert(self._tabs, tab)
+    if not self._activeTab then self._activeTab = tab end
+    return tab
+end
+
+function Window:SetTab(nameOrIndex)
+    for i, tab in ipairs(self._tabs) do
+        if tab.name == nameOrIndex or i == nameOrIndex then
+            self._activeTab = tab
+            return true
+        end
+    end
+    return false
+end
+
+function Tab:Section(name, _side)
+    -- side argument kept for compatibility with MatchaGUI but ignored here:
+    -- Venus layout is single-column.
+    local section = setmetatable({}, Section)
+    section.tab = self
+    section.window = self.window
+    section.name = asText(name)
+    if section.name == "" then section.name = "Section" end
+    section.widgets = {}
+
+    section.fillBorder = makeRoundedFill(self.window, 50)
+    section.fill = makeRoundedFill(self.window, 51)
+    section.header = makeText(self.window, section.name, 12, self.window.theme.text, 70)
+    section.header.Font = FONT_BOLD
+
+    table.insert(self.sections, section)
+    return section
+end
+
+function Section:_addWidget(kind, id, label, opts)
+    opts = opts or {}
+    id = id or (self.name .. "_" .. kind .. "_" .. tostring(#self.widgets + 1))
+
+    local win = self.window
+    local widget = {
+        kind = kind,
+        id = id,
+        label = asText(label),
+        section = self,
+        window = win,
+        callback = opts.callback,
+        value = opts.value,
+        skipConfig = opts.skipConfig == true,
+        min = opts.min,
+        max = opts.max,
+        step = opts.step,
+        format = opts.format,
+        mode = opts.mode,
+        items = opts.items or {},
+        key = opts.key,
+        bindActive = false,
+        lastKeyDown = false,
+        listening = false,
+        paletteIndex = opts.paletteIndex or 1,
+        color = opts.color,
+        x = 0, y = 0, w = 1, h = opts.h or 22,
+    }
+
+    if widget.label == "" then widget.label = id end
+
+    if kind == "toggle" then
+        widget.h = 18
+        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
+        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
+        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
+    elseif kind == "slider" then
+        widget.h = 22
+        widget.fillBorder = makeRoundedFill(win, 60)
+        widget.fillBg = makeRoundedFill(win, 61)
+        widget.fillBar = makeRoundedFill(win, 62)
+        widget.labelText = makeText(win, "", 12, win.theme.text, 70)
+        widget.labelText.Center = true
+        widget.editBox = makeRoundedFill(win, 80)
+        widget.editBorder = makeRoundedBorder(win, 81)
+    elseif kind == "button" then
+        widget.h = 22
+        widget.fillBorder = makeRoundedFill(win, 60)
+        widget.fill = makeRoundedFill(win, 61)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.labelText.Center = true
+        widget.labelText.Font = FONT_BOLD
+    elseif kind == "keybind" then
+        widget.h = 18
+        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
+        widget.labelText.Font = FONT_BOLD
+        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+    elseif kind == "menu_keybind" then
+        widget.h = 18
+        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
+        widget.labelText.Font = FONT_BOLD
+        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+    elseif kind == "toggle_keybind" then
+        widget.h = 18
+        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
+        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
+        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
+        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+    elseif kind == "input_text" then
+        widget.h = 22
+        widget.fillBorder = makeRoundedFill(win, 60)
+        widget.fill = makeRoundedFill(win, 61)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.muted, 70)
+        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+        widget.valueText.Center = true
+    elseif kind == "combo" then
+        widget.h = 22
+        widget.open = false
+        widget.fillBorder = makeRoundedFill(win, 60)
+        widget.fill = makeRoundedFill(win, 61)
+        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+        widget.arrow = createDrawing(win, "Triangle", {
+            Color = win.theme.muted,
+            Filled = true,
+            Visible = true,
+            Thickness = 1,
+            ZIndex = 70,
+            PointA = Vector2_new(0, 0),
+            PointB = Vector2_new(0, 0),
+            PointC = Vector2_new(0, 0),
+        })
+        widget.dropdownBorder = makeRoundedFill(win, 90)
+        widget.dropdown = makeRoundedFill(win, 91)
+        widget.optionTexts = {}
+        widget.optionHovers = {}
+        for i = 1, 6 do
+            widget.optionHovers[i] = makeBox(win, win.theme.hover, 92)
+            widget.optionTexts[i] = makeText(win, "", 12, win.theme.text, 95)
+        end
+    elseif kind == "color_picker" then
+        widget.h = 18
+        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
+        widget.labelText.Font = FONT_BOLD
+        widget.dot = makeFilledCircle(win, opts.color or win.theme.white, 70)
+    elseif kind == "toggle_color" then
+        widget.h = 18
+        widget.color = opts.color or win.theme.white
+        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
+        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
+        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
+        widget.swatch = makeFilledCircle(win, widget.color, 70)
+    elseif kind == "text" then
+        widget.h = opts.h or 16
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+    end
+
+    table.insert(self.widgets, widget)
+    win._widgetsById[id] = widget
+    win._values[id] = widget.value
+
+    if kind == "combo" then
+        function widget:SetItems(items)
+            self.items = normalizeItems(items)
+            if type(self.value) ~= "number" then self.value = 0 end
+            if #self.items <= 0 then
+                self.value = -1
+            elseif self.value == nil or self.value < 0 then
+                self.value = 0
+            elseif self.value > #self.items - 1 then
+                self.value = #self.items - 1
+            end
+            self.window._values[self.id] = self.value
+            return self
+        end
+        function widget:GetItems() return self.items end
+        function widget:GetText()
+            if not self.items then return "" end
+            return asText(self.items[(self.value or -1) + 1])
+        end
+        function widget:SetValue(index)
+            if type(index) ~= "number" then index = 0 end
+            if #self.items <= 0 then
+                self.value = -1
+            else
+                self.value = clamp(index or 0, 0, #self.items - 1)
+            end
+            self.window._values[self.id] = self.value
+            if self.callback then
+                self.callback(self.value, self:GetText(), self)
+            end
+            return self
+        end
+        widget:SetItems(widget.items)
+    end
+
+    return widget
+end
+
+-- Public Section API ---------------------------------------------------------
+
+function Section:Toggle(id, label, default, callback)
+    return self:_addWidget("toggle", id, label, {
+        value = default == true,
+        callback = callback,
+    })
+end
+
+function Section:SliderInt(id, label, minValue, maxValue, default, callback)
+    return self:_addWidget("slider", id, label, {
+        min = minValue or 0, max = maxValue or 100,
+        value = default or minValue or 0,
+        step = 1, format = "%d",
+        callback = callback,
+    })
+end
+
+function Section:SliderFloat(id, label, minValue, maxValue, default, format, callback)
+    return self:_addWidget("slider", id, label, {
+        min = minValue or 0, max = maxValue or 1,
+        value = default or minValue or 0,
+        step = 1 / 100, format = format or "%.2f",
+        callback = callback,
+    })
+end
+
+function Section:Combo(id, label, items, defaultIndex, callback, options)
+    options = options or {}
+    return self:_addWidget("combo", id, label, {
+        value = defaultIndex or 0, items = items or {},
+        callback = callback, skipConfig = options.skipConfig == true,
+    })
+end
+
+function Section:Dropdown(id, label, items, defaultIndex, callback, options)
+    return self:Combo(id, label, items, defaultIndex, callback, options)
+end
+
+function Section:Button(label, callback)
+    return self:_addWidget("button", nil, label, {
+        value = false, callback = callback,
+    })
+end
+
+function Section:Keybind(id, label, defaultKey, mode, callback)
+    return self:_addWidget("keybind", id, label, {
+        value = false, key = defaultKey or 0x46,
+        mode = mode or "toggle", callback = callback,
+    })
+end
+
+function Section:MenuKeybind(id, label, defaultKey, callback)
+    local key = defaultKey or self.window.toggleKey or 0x70
+    self.window:SetMenuKey(key)
+    return self:_addWidget("menu_keybind", id, label or "Menu key", {
+        value = key, key = key, mode = "menu", callback = callback,
+    })
+end
+
+function Section:ToggleKeybind(id, label, default, defaultKey, mode, callback)
+    return self:_addWidget("toggle_keybind", id, label, {
+        value = default == true,
+        key = defaultKey or 0x46,
+        mode = mode or "toggle",
+        callback = callback,
+    })
+end
+
+function Section:InputText(id, label, default, callback, options)
+    options = options or {}
+    return self:_addWidget("input_text", id, label, {
+        value = asText(default), callback = callback,
+        skipConfig = options.skipConfig == true,
+    })
+end
+
+function Section:Box(id, label, default, callback, options)
+    return self:InputText(id, label, default, callback, options)
+end
+
+function Section:ColorPicker(id, label, r, g, b, _a, callback)
+    local color = Color3_fromRGB(r or 255, g or 255, b or 255)
+    return self:_addWidget("color_picker", id, label, {
+        value = color, color = color, callback = callback,
+    })
+end
+
+function Section:ToggleColorPicker(id, label, default, r, g, b, callback)
+    local color = Color3_fromRGB(r or 255, g or 255, b or 255)
+    return self:_addWidget("toggle_color", id, label, {
+        value = default == true, color = color, callback = callback,
+    })
+end
+
+function Section:Text(text)
+    return self:_addWidget("text", nil, text, { value = asText(text) })
+end
+
+function Section:Label(text) return self:Text(text) end
+
+-- Window value / config API --------------------------------------------------
+
+function Window:GetValue(id)
+    local widget = self._widgetsById[id]
+    if widget then return widget.value end
+    return self._values[id]
+end
+
+function Window:SetValue(id, value)
+    local widget = self._widgetsById[id]
+    if not widget then
+        self._values[id] = value
+        return false
+    end
+    if widget.kind == "menu_keybind" then
+        self:SetMenuKey(value)
+        if widget.callback then widget.callback(value, widget) end
+        return true
+    end
+    if widget.kind == "combo" then
+        widget:SetValue(value)
+        return true
+    end
+    if widget.kind == "input_text" then value = asText(value) end
+    widget.value = value
+    self._values[id] = value
+    if widget.callback then widget.callback(value, widget) end
+    return true
+end
+
+function Window:GetConfigData()
+    local data = { version = 1, values = {} }
+    for id, widget in pairs(self._widgetsById) do
+        local packed = encodeValue(widget)
+        if packed ~= nil then data.values[id] = packed end
+    end
+    return data
+end
+
+function Window:ApplyConfigData(data)
+    if not data or not data.values then return false, "invalid config" end
+    for id, packed in pairs(data.values) do
+        local widget = self._widgetsById[id]
+        if widget and not widget.skipConfig then
+            local value, ok = decodeValue(widget, packed)
+            if ok then
+                if widget.kind == "menu_keybind" then
+                    self:SetMenuKey(value)
+                    if widget.callback then widget.callback(value, widget) end
+                elseif widget.kind == "combo" then
+                    widget:SetValue(value)
+                else
+                    widget.value = value
+                    self._values[id] = value
+                    if widget.kind == "keybind" and packed.key then
+                        widget.key = packed.key
+                    end
+                    if widget.callback then widget.callback(value, widget) end
+                end
+            end
+        end
+    end
+    return true
+end
+
+function Window:ConfigPath(name)
+    return joinPath(self.configFolder, cleanName(name) .. ".json")
+end
+
+function Window:SaveConfig(name)
+    name = cleanName(name)
+    local okFolder, folderErr = ensureFolderPath(self.configFolder)
+    if not okFolder then return false, folderErr end
+    if not writefile then return false, "writefile unavailable" end
+    local http = getHttpService()
+    if not http then return false, "HttpService unavailable" end
+    local okEncode, encoded = pcall(function()
+        return http:JSONEncode(self:GetConfigData())
+    end)
+    if not okEncode or not encoded then return false, "encode failed" end
+    local okWrite = pcall(writefile, self:ConfigPath(name), encoded)
+    if not okWrite then return false, "write failed" end
+    return true, name
+end
+
+function Window:LoadConfig(name)
+    name = cleanName(name)
+    if not readfile or not isfile then return false, "readfile unavailable" end
+    local path = self:ConfigPath(name)
+    local okExists, exists = pcall(isfile, path)
+    if not okExists or exists ~= true then return false, "config not found" end
+    local okRead, raw = pcall(readfile, path)
+    if not okRead or not raw then return false, "read failed" end
+    local http = getHttpService()
+    if not http then return false, "HttpService unavailable" end
+    local okDecode, data = pcall(function() return http:JSONDecode(raw) end)
+    if not okDecode or not data then return false, "decode failed" end
+    return self:ApplyConfigData(data)
+end
+
+function Window:DeleteConfig(name)
+    name = cleanName(name)
+    if not delfile or not isfile then return false, "delfile unavailable" end
+    local path = self:ConfigPath(name)
+    local okExists, exists = pcall(isfile, path)
+    if okExists and exists == true then
+        local okDelete = pcall(delfile, path)
+        if okDelete then return true, name end
+        return false, "delete failed"
+    end
+    return false, "config not found"
+end
+
+function Window:ListConfigs()
+    local out = {}
+    ensureFolderPath(self.configFolder)
+    if not listfiles then return out end
+    local okList, files = pcall(listfiles, self.configFolder)
+    if okList and files then
+        for _, path in ipairs(files) do
+            local name = fileName(path)
+            if name:match("%.json$") or name:match("%.cfg$") then
+                table.insert(out, stripExt(name))
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+function Window:IsKeyActive(id)
+    local widget = self._widgetsById[id]
+    if not widget then return false end
+    if widget.kind == "keybind" then return widget.value == true end
+    if widget.kind == "toggle_keybind" then
+        return widget.value == true and widget.bindActive == true
+    end
+    return false
+end
+
+function Window:SetMenuKey(vk)
+    vk = asNumber(vk, nil)
+    if not vk then return false end
+    self.toggleKey = vk
+    self._lastToggleKey = readKey(vk)
+    for _, tab in ipairs(self._tabs) do
+        for _, section in ipairs(tab.sections) do
+            for _, widget in ipairs(section.widgets) do
+                if widget.kind == "menu_keybind" then
+                    widget.key = vk
+                    widget.value = vk
+                    self._values[widget.id] = vk
+                end
+            end
+        end
+    end
+    return true
+end
+
+function Window:SetVisible(visible)
+    self.visible = visible == true
+    self:_applyVisibility()
+end
+
+function Window:Toggle()
+    self.visible = not self.visible
+    self:_applyVisibility()
+end
+
+function Window:Start()
+    if self._destroyed then return self end
+    if self._running then return self end
+    self._running = true
+    if self._connection then return self end
+    local ok, rs = pcall(function() return game:GetService("RunService") end)
+    if ok and rs and rs.RenderStepped then
+        self._connection = rs.RenderStepped:Connect(function(dt)
+            if self._running then self:Step(dt) end
+        end)
+    else
+        task.spawn(function()
+            while self._running do
+                self:Step(0)
+                task.wait()
+            end
+        end)
+    end
+    return self
+end
+
+function Window:Stop() self._running = false end
+
+function Window:Disconnect()
+    self._running = false
+    if self._connection then
+        local conn = self._connection
+        self._connection = nil
+        task.defer(function() pcall(function() conn:Disconnect() end) end)
+    end
+end
+
+function Window:Destroy()
+    self._running = false
+    self._destroyed = true
+    if self._connection then
+        local conn = self._connection
+        self._connection = nil
+        task.defer(function() pcall(function() conn:Disconnect() end) end)
+    end
+    removeAll(self._drawings)
+end
+
+-- Mouse / hotkeys ------------------------------------------------------------
+
+function Window:_readMouse()
+    local mx, my = self._mouse.x, self._mouse.y
+    local ok, player = pcall(function()
+        local players = game:GetService("Players")
+        return players and players.LocalPlayer
+    end)
+    if ok and player then
+        local okMouse, mouse = pcall(function() return player:GetMouse() end)
+        if okMouse and mouse then
+            mx = mouse.X or mx
+            my = mouse.Y or my
+        end
+    end
+    local active = robloxActive()
+    local down = false
+    local rightDown = false
+    if active then
+        down = readMouseDown()
+        rightDown = readMouse2Down()
+    end
+    local wasDown = self._mouse.down
+    local wasRightDown = self._mouse.rightDown
+    self._mouse.px = self._mouse.x
+    self._mouse.py = self._mouse.y
+    self._mouse.x = mx
+    self._mouse.y = my
+    self._mouse.down = down
+    self._mouse.clicked = down and not wasDown
+    self._mouse.released = (not down) and wasDown
+    self._mouse.rightDown = rightDown
+    self._mouse.rightClicked = rightDown and not wasRightDown
+    self._mouse.rightReleased = (not rightDown) and wasRightDown
+end
+
+function Window:_beginSliderEdit(widget)
+    if not widget or widget.kind ~= "slider" then return end
+    local minValue = sliderLimits(widget)
+    local value = normalizeSliderValue(widget, widget.value or minValue) or minValue
+    if self._activeCombo then
+        self._activeCombo.open = false
+        self._activeCombo = nil
+    end
+    if self._listeningBind then
+        self._listeningBind.listening = false
+        self._listeningBind = nil
+    end
+    self._activeSlider = nil
+    self._activeText = widget
+    self._textLastKeys = {}
+    widget.editText = formatSliderValue(widget, value)
+    widget.editInvalid = false
+end
+
+function Window:_clearSliderEdit(widget)
+    if widget and widget.kind == "slider" then
+        widget.editText = nil
+        widget.editInvalid = false
+    end
+    if self._activeText == widget then self._activeText = nil end
+    self._textLastKeys = {}
+end
+
+function Window:_handleHotkeys()
+    local active = robloxActive()
+    local down = false
+    if active then down = readKey(self.toggleKey) end
+    if down and not self._lastToggleKey and not self._listeningBind and not self._activeText then
+        self:Toggle()
+    end
+    self._lastToggleKey = down
+
+    if not active then return end
+
+    if self._activeText then
+        local widget = self._activeText
+        if widget.kind == "slider" then
+            local changed = false
+            local value = asText(widget.editText)
+            for _, vk in ipairs(KEY_SCAN) do
+                local keyDown = readKey(vk)
+                local wasDown = self._textLastKeys[vk] == true
+                if keyDown and not wasDown then
+                    if vk == 0x0D then
+                        local ok = applySliderValue(self, widget, tonumber(value))
+                        if ok then
+                            self:_clearSliderEdit(widget)
+                            break
+                        end
+                        widget.editInvalid = true
+                    elseif vk == 0x1B then
+                        self:_clearSliderEdit(widget); break
+                    elseif vk == 0x08 then
+                        if #value > 0 then
+                            value = string.sub(value, 1, #value - 1)
+                            changed = true
+                        end
+                    elseif vk == 0x2E then
+                        value = ""; changed = true
+                    else
+                        local ch = numericCharFromKey(vk)
+                        if ch and #value < 18 then
+                            if ch == "." then
+                                if not string.find(value, ".", 1, true) then
+                                    value = value .. ch; changed = true
+                                end
+                            elseif ch == "-" or ch == "+" then
+                                if #value == 0 then
+                                    value = value .. ch; changed = true
+                                end
+                            else
+                                value = value .. ch; changed = true
+                            end
+                        end
+                    end
+                end
+                self._textLastKeys[vk] = keyDown
+            end
+            if changed then
+                widget.editText = value
+                widget.editInvalid = false
+            end
+            releaseTextBlockKeys()
+            return
+        end
+
+        local changed = false
+        local value = asText(widget.value)
+        for _, vk in ipairs(KEY_SCAN) do
+            local keyDown = readKey(vk)
+            local wasDown = self._textLastKeys[vk] == true
+            if keyDown and not wasDown then
+                if vk == 0x0D or vk == 0x1B then
+                    self._activeText = nil
+                    self._textLastKeys = {}
+                    break
+                elseif vk == 0x08 then
+                    if #value > 0 then
+                        value = string.sub(value, 1, #value - 1)
+                        changed = true
+                    end
+                else
+                    local ch = charFromKey(vk)
+                    if ch and #value < 64 then
+                        value = value .. ch; changed = true
+                    end
+                end
+            end
+            self._textLastKeys[vk] = keyDown
+        end
+        if changed then
+            widget.value = value
+            self._values[widget.id] = value
+            if widget.callback then widget.callback(value, widget) end
+        end
+        releaseTextBlockKeys()
+        return
+    end
+
+    if self._listeningBind then
+        local target = self._listeningBind
+        for _, vk in ipairs(KEY_SCAN) do
+            if readKey(vk) then
+                if target.kind == "menu_keybind" then
+                    self:SetMenuKey(vk)
+                    if target.callback then target.callback(vk, target) end
+                else
+                    target.key = vk
+                end
+                target.listening = false
+                self._listeningBind = nil
+                break
+            end
+        end
+    end
+
+    for _, tab in ipairs(self._tabs) do
+        for _, section in ipairs(tab.sections) do
+            for _, widget in ipairs(section.widgets) do
+                if widget.kind == "keybind" and widget.key then
+                    local keyDown = readKey(widget.key)
+                    local old = widget.value
+                    if widget.mode == "hold" then
+                        widget.value = keyDown
+                    elseif keyDown and not widget.lastKeyDown then
+                        widget.value = not widget.value
+                    end
+                    if old ~= widget.value then
+                        self._values[widget.id] = widget.value
+                        if widget.callback then
+                            widget.callback(widget.value, widget.key, widget)
+                        end
+                    end
+                    widget.lastKeyDown = keyDown
+                elseif widget.kind == "toggle_keybind" and widget.key then
+                    local keyDown = readKey(widget.key)
+                    local oldActive = widget.bindActive
+                    if widget.mode == "hold" then
+                        widget.bindActive = keyDown
+                    elseif keyDown and not widget.lastKeyDown then
+                        widget.bindActive = not widget.bindActive
+                    end
+                    if oldActive ~= widget.bindActive and widget.callback then
+                        widget.callback(widget.value, widget.key, widget.bindActive, widget)
+                    end
+                    widget.lastKeyDown = keyDown
+                end
+            end
+        end
+    end
+end
+
+function Window:_applyVisibility()
+    if self.visible then return end
+    for _, obj in ipairs(self._drawings) do
+        setVisible(obj, false)
+    end
+end
+
+-- Layout ---------------------------------------------------------------------
+
+function Window:_layoutShell()
+    local x, y, w, h = self.x, self.y, self.w, self.h
+    local theme = self.theme
+    local visible = self.visible
+
+    local r = 8
+    layoutRoundedFill(self.cardBorder, x - 1, y - 1, w + 2, h + 2, r + 1, theme.stroke2)
+    layoutRoundedFill(self.card, x, y, w, h, r, theme.card)
+    setRoundedFillVisible(self.cardBorder, visible)
+    setRoundedFillVisible(self.card, visible)
+
+    self.titleText.Text = self.title
+    self.titleText.Size = 14
+    self.titleText.Color = theme.text
+    self.titleText.Position = Vector2_new(x + 18, y + 14)
+    setVisible(self.titleText, visible)
+end
+
+function Window:_layoutTabs()
+    local count = #self._tabs
+    if count <= 0 then return end
+
+    local theme = self.theme
+    local pad = 16
+    local tabH = 22
+    local gap = 6
+    local x = self.x + pad
+    local y = self.y + 42
+    local mx, my = self._mouse.x, self._mouse.y
+
+    for i, tab in ipairs(self._tabs) do
+        local label = tab.name
+        local tabW = math_max(60, #label * 8 + 16)
+        local tx = x
+
+        local hover = inside(mx, my, tx, y, tabW, tabH)
+        if self.visible and self._mouse.clicked and hover then
+            self._activeTab = tab
+        end
+
+        local active = self._activeTab == tab
+        local pillColor = active and theme.panel or theme.card
+        layoutRoundedFill(tab.pill, tx, y, tabW, tabH, 4, pillColor)
+        setRoundedFillVisible(tab.pill, self.visible)
+
+        tab.label.Text = label
+        tab.label.Color = active and theme.text or theme.muted
+        tab.label.Size = 12
+        tab.label.Center = true
+        tab.label.Position = Vector2_new(tx + math_floor(tabW / 2), y + math_floor(tabH / 2) - 6)
+        setVisible(tab.label, self.visible)
+
+        x = x + tabW + gap
+    end
+end
+
+function Window:_layoutSections()
+    local tab = self._activeTab
+    local theme = self.theme
+    local pad = 16
+    local bodyX = self.x + pad
+    local bodyY = self.y + 78
+    local bodyW = self.w - pad * 2
+    local cursorY = bodyY
+
+    for _, otherTab in ipairs(self._tabs) do
+        for _, section in ipairs(otherTab.sections) do
+            local activeSection = otherTab == tab and self.visible
+
+            local titleH = 18
+            local contentH = 10
+            for _, widget in ipairs(section.widgets) do
+                contentH = contentH + widget.h + 2
+            end
+            local sectionH = titleH + contentH + 6
+
+            if activeSection then
+                local sx = bodyX
+                local sy = cursorY
+                local sw = bodyW
+                local sh = sectionH
+
+                layoutRoundedFill(section.fillBorder, sx - 1, sy - 1, sw + 2, sh + 2, 7, theme.stroke)
+                layoutRoundedFill(section.fill, sx, sy, sw, sh, 6, theme.bg)
+                setRoundedFillVisible(section.fillBorder, true)
+                setRoundedFillVisible(section.fill, true)
+
+                section.header.Text = section.name
+                section.header.Color = theme.text
+                section.header.Size = 12
+                section.header.Position = Vector2_new(sx + 12, sy + 6)
+                setVisible(section.header, true)
+
+                local wy = sy + titleH + 6
+                for _, widget in ipairs(section.widgets) do
+                    widget.x = sx + 10
+                    widget.y = wy
+                    widget.w = sw - 20
+                    self:_layoutWidget(widget, true)
+                    wy = wy + widget.h + 2
+                end
+
+                cursorY = cursorY + sectionH + 8
+            else
+                setRoundedFillVisible(section.fillBorder, false)
+                setRoundedFillVisible(section.fill, false)
+                setVisible(section.header, false)
+                for _, widget in ipairs(section.widgets) do
+                    self:_layoutWidget(widget, false)
+                end
+            end
+        end
+    end
+end
+
+-- Per-widget visibility helper ----------------------------------------------
+
+local function hideWidget(widget)
+    if widget.fill then setRoundedFillVisible(widget.fill, false) end
+    if widget.fillBorder then setRoundedFillVisible(widget.fillBorder, false) end
+    if widget.fillBg then setRoundedFillVisible(widget.fillBg, false) end
+    if widget.fillBar then setRoundedFillVisible(widget.fillBar, false) end
+    if widget.editBox then setRoundedFillVisible(widget.editBox, false) end
+    if widget.editBorder then setRoundedBorderVisible(widget.editBorder, false) end
+    if widget.dropdown then setRoundedFillVisible(widget.dropdown, false) end
+    if widget.dropdownBorder then setRoundedFillVisible(widget.dropdownBorder, false) end
+    setVisible(widget.dotOuter, false)
+    setVisible(widget.dotInner, false)
+    setVisible(widget.swatch, false)
+    setVisible(widget.dot, false)
+    setVisible(widget.labelText, false)
+    setVisible(widget.valueText, false)
+    setVisible(widget.arrow, false)
+    if widget.optionTexts then
+        for _, t in ipairs(widget.optionTexts) do setVisible(t, false) end
+    end
+    if widget.optionHovers then
+        for _, b in ipairs(widget.optionHovers) do setVisible(b, false) end
+    end
+end
+
+function Window:_layoutWidget(widget, visible)
+    if not visible then hideWidget(widget); return end
+
+    local mx, my = self._mouse.x, self._mouse.y
+    local hover = inside(mx, my, widget.x, widget.y, widget.w, widget.h)
+    local clicked = self._mouse.clicked and hover
+    local theme = self.theme
+
+    if widget.kind == "toggle" then
+        if clicked then
+            widget.value = not widget.value
+            self._values[widget.id] = widget.value
+            if widget.callback then widget.callback(widget.value, widget) end
+        end
+        local cx = widget.x + 7
+        local cy = widget.y + math_floor(widget.h / 2)
+        widget.dotOuter.Position = Vector2_new(cx, cy)
+        widget.dotOuter.Radius = 5
+        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
+        widget.dotInner.Position = Vector2_new(cx, cy)
+        widget.dotInner.Radius = 3
+        widget.dotInner.Color = theme.accent
+        setVisible(widget.dotOuter, true)
+        setVisible(widget.dotInner, widget.value == true)
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 13
+        widget.labelText.Color = widget.value and theme.text or theme.muted
+        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
+        setVisible(widget.labelText, true)
+
+    elseif widget.kind == "slider" then
+        local minValue, maxValue = sliderLimits(widget)
+        local rowHit = hover
+        local editingSlider = self._activeText == widget
+
+        if self._mouse.rightClicked and rowHit then
+            self:_beginSliderEdit(widget); editingSlider = true
+        elseif self._mouse.clicked and editingSlider and not rowHit then
+            self:_clearSliderEdit(widget); editingSlider = false
+        end
+
+        if self._mouse.clicked and not editingSlider and rowHit then
+            self._activeSlider = widget
+        end
+        if self._mouse.released and self._activeSlider == widget then
+            self._activeSlider = nil
+        end
+        if self._activeSlider == widget and self._mouse.down then
+            local pct = clamp((mx - widget.x) / widget.w, 0, 1)
+            local raw = minValue + (maxValue - minValue) * pct
+            applySliderValue(self, widget, raw)
+        end
+
+        local value = normalizeSliderValue(widget, widget.value or minValue) or minValue
+        local pct = (value - minValue) / (maxValue - minValue)
+
+        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, theme.stroke)
+        layoutRoundedFill(widget.fillBg, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
+        setRoundedFillVisible(widget.fillBorder, true)
+        setRoundedFillVisible(widget.fillBg, true)
+
+        local barW = math_max(8, math_floor(widget.w * pct))
+        layoutRoundedFill(widget.fillBar, widget.x, widget.y, barW, widget.h, 3, theme.accent2)
+        setRoundedFillVisible(widget.fillBar, pct > 0)
+
+        if editingSlider then
+            local editW = 80
+            local editX = widget.x + widget.w - editW - 2
+            local editY = widget.y + 1
+            local editH = widget.h - 2
+            layoutRoundedFill(widget.editBox, editX, editY, editW, editH, 3, theme.control2)
+            layoutRoundedBorder(widget.editBorder, editX, editY, editW, editH, 3,
+                widget.editInvalid and theme.danger or theme.accent)
+            setRoundedFillVisible(widget.editBox, true)
+            setRoundedBorderVisible(widget.editBorder, true)
+            widget.labelText.Text = asText(widget.editText) .. "|"
+            widget.labelText.Color = widget.editInvalid and theme.danger or theme.text
+            widget.labelText.Center = true
+            widget.labelText.Position = Vector2_new(editX + math_floor(editW / 2), widget.y + 5)
+        else
+            widget.labelText.Text = widget.label .. ": " .. formatSliderValue(widget, value)
+            widget.labelText.Color = theme.text
+            widget.labelText.Center = true
+            widget.labelText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
+        end
+        widget.labelText.Size = 12
+        setVisible(widget.labelText, true)
+
+    elseif widget.kind == "button" then
+        if clicked and widget.callback then widget.callback(widget) end
+        local fillColor = hover and theme.panel2 or theme.panel
+        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, theme.stroke)
+        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, fillColor)
+        setRoundedFillVisible(widget.fillBorder, true)
+        setRoundedFillVisible(widget.fill, true)
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Center = true
+        widget.labelText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
+        setVisible(widget.labelText, true)
+
+    elseif widget.kind == "keybind" or widget.kind == "menu_keybind" then
+        if clicked then
+            if self._listeningBind then self._listeningBind.listening = false end
+            self._listeningBind = widget
+            widget.listening = true
+        end
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 13
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 2)
+        setVisible(widget.labelText, true)
+        widget.valueText.Text = widget.listening and "..." or keyName(widget.key)
+        widget.valueText.Size = 12
+        widget.valueText.Center = false
+        local rightX = widget.x + widget.w - (#asText(widget.valueText.Text) * 7)
+        widget.valueText.Color = widget.listening and theme.accent2
+            or (widget.kind == "keybind" and widget.value and theme.accent or theme.text)
+        widget.valueText.Position = Vector2_new(rightX, widget.y + 3)
+        setVisible(widget.valueText, true)
+
+    elseif widget.kind == "toggle_keybind" then
+        local toggleHit = inside(mx, my, widget.x, widget.y, widget.w * 0.6, widget.h)
+        local keyHit = inside(mx, my, widget.x + widget.w * 0.6, widget.y, widget.w * 0.4, widget.h)
+        if self._mouse.clicked and toggleHit then
+            widget.value = not widget.value
+            self._values[widget.id] = widget.value
+            if widget.callback then
+                widget.callback(widget.value, widget.key, widget.bindActive, widget)
+            end
+        end
+        if self._mouse.clicked and keyHit then
+            if self._listeningBind then self._listeningBind.listening = false end
+            self._listeningBind = widget
+            widget.listening = true
+        end
+        local cx = widget.x + 7
+        local cy = widget.y + math_floor(widget.h / 2)
+        widget.dotOuter.Position = Vector2_new(cx, cy); widget.dotOuter.Radius = 5
+        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
+        widget.dotInner.Position = Vector2_new(cx, cy); widget.dotInner.Radius = 3
+        widget.dotInner.Color = theme.accent
+        setVisible(widget.dotOuter, true)
+        setVisible(widget.dotInner, widget.value == true)
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 13
+        widget.labelText.Color = widget.value and theme.text or theme.muted
+        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
+        setVisible(widget.labelText, true)
+        widget.valueText.Text = widget.listening and "..." or keyName(widget.key)
+        widget.valueText.Size = 12
+        widget.valueText.Center = false
+        local txt = asText(widget.valueText.Text)
+        widget.valueText.Color = widget.listening and theme.accent2
+            or (widget.bindActive and theme.accent or theme.text)
+        widget.valueText.Position = Vector2_new(widget.x + widget.w - #txt * 7, widget.y + 3)
+        setVisible(widget.valueText, true)
+
+    elseif widget.kind == "input_text" then
+        local activeText = self._activeText == widget
+        if self._mouse.clicked then
+            if hover then
+                self._activeText = widget
+                self._textLastKeys = {}
+            elseif activeText then
+                self._activeText = nil
+                self._textLastKeys = {}
+            end
+        end
+        local borderColor = activeText and theme.accent or theme.stroke
+        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, borderColor)
+        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
+        setRoundedFillVisible(widget.fillBorder, true)
+        setRoundedFillVisible(widget.fill, true)
+        local display = asText(widget.value)
+        if activeText then display = display .. "|" end
+        if display == "" then
+            display = widget.label
+            widget.valueText.Color = theme.muted
+        else
+            widget.valueText.Color = theme.text
+        end
+        widget.valueText.Text = display
+        widget.valueText.Size = 12
+        widget.valueText.Center = true
+        widget.valueText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
+        setVisible(widget.valueText, true)
+
+    elseif widget.kind == "combo" then
+        local maxRows = math_min(#widget.items, #widget.optionTexts)
+        local rowH = 18
+
+        if self._mouse.clicked then
+            if hover then
+                if self._activeCombo and self._activeCombo ~= widget then
+                    self._activeCombo.open = false
+                end
+                widget.open = not widget.open
+                self._activeCombo = widget.open and widget or nil
+            elseif widget.open then
+                local picked = false
+                for i = 1, maxRows do
+                    local oy = widget.y + widget.h + 2 + (i - 1) * rowH
+                    if inside(mx, my, widget.x, oy, widget.w, rowH) then
+                        widget:SetValue(i - 1)
+                        picked = true
+                        break
+                    end
+                end
+                widget.open = false
+                self._activeCombo = nil
+                if not picked and not inside(mx, my, widget.x, widget.y, widget.w, widget.h + 2 + maxRows * rowH) then
+                    widget.open = false
+                end
+            end
+        end
+
+        local borderColor = widget.open and theme.accent or theme.stroke
+        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, borderColor)
+        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
+        setRoundedFillVisible(widget.fillBorder, true)
+        setRoundedFillVisible(widget.fill, true)
+
+        widget.valueText.Text = widget:GetText()
+        widget.valueText.Size = 12
+        widget.valueText.Color = theme.text
+        widget.valueText.Center = false
+        widget.valueText.Position = Vector2_new(widget.x + 8, widget.y + 5)
+        setVisible(widget.valueText, true)
+
+        local arrowX = widget.x + widget.w - 12
+        local arrowY = widget.y + math_floor(widget.h / 2)
+        if widget.open then
+            widget.arrow.PointA = Vector2_new(arrowX - 4, arrowY + 2)
+            widget.arrow.PointB = Vector2_new(arrowX + 4, arrowY + 2)
+            widget.arrow.PointC = Vector2_new(arrowX, arrowY - 3)
+        else
+            widget.arrow.PointA = Vector2_new(arrowX - 4, arrowY - 2)
+            widget.arrow.PointB = Vector2_new(arrowX + 4, arrowY - 2)
+            widget.arrow.PointC = Vector2_new(arrowX, arrowY + 3)
+        end
+        widget.arrow.Color = theme.muted
+        setVisible(widget.arrow, true)
+
+        if widget.open and maxRows > 0 then
+            local dx = widget.x
+            local dy = widget.y + widget.h + 2
+            local dh = maxRows * rowH
+            layoutRoundedFill(widget.dropdownBorder, dx - 1, dy - 1, widget.w + 2, dh + 2, 4, theme.stroke)
+            layoutRoundedFill(widget.dropdown, dx, dy, widget.w, dh, 3, theme.panel)
+            setRoundedFillVisible(widget.dropdownBorder, true)
+            setRoundedFillVisible(widget.dropdown, true)
+            for i = 1, #widget.optionTexts do
+                local box = widget.optionHovers[i]
+                local txt = widget.optionTexts[i]
+                if i <= maxRows then
+                    local oy = dy + (i - 1) * rowH
+                    local rowHover = inside(mx, my, dx, oy, widget.w, rowH)
+                    box.Position = Vector2_new(dx, oy)
+                    box.Size = Vector2_new(widget.w, rowH)
+                    box.Color = theme.hover
+                    setVisible(box, rowHover)
+                    txt.Text = asText(widget.items[i])
+                    txt.Size = 12
+                    txt.Center = false
+                    txt.Color = (widget.value == i - 1) and theme.accent or theme.text
+                    txt.Position = Vector2_new(dx + 8, oy + 3)
+                    setVisible(txt, true)
+                else
+                    setVisible(box, false)
+                    setVisible(txt, false)
+                end
+            end
+        else
+            setRoundedFillVisible(widget.dropdownBorder, false)
+            setRoundedFillVisible(widget.dropdown, false)
+            for i = 1, #widget.optionTexts do
+                setVisible(widget.optionHovers[i], false)
+                setVisible(widget.optionTexts[i], false)
+            end
+        end
+
+    elseif widget.kind == "color_picker" then
+        if clicked then
+            widget.paletteIndex = widget.paletteIndex + 1
+            if widget.paletteIndex > #COLOR_PALETTE then widget.paletteIndex = 1 end
+            widget.value = COLOR_PALETTE[widget.paletteIndex]
+            self._values[widget.id] = widget.value
+            if widget.callback then widget.callback(widget.value, widget) end
+        end
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 13
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 2)
+        setVisible(widget.labelText, true)
+        local cx = widget.x + widget.w - 8
+        local cy = widget.y + math_floor(widget.h / 2)
+        widget.dot.Position = Vector2_new(cx, cy)
+        widget.dot.Radius = 5
+        widget.dot.Color = isColor(widget.value) and widget.value or theme.white
+        setVisible(widget.dot, true)
+
+    elseif widget.kind == "toggle_color" then
+        local toggleHit = inside(mx, my, widget.x, widget.y, widget.w - 20, widget.h)
+        local swatchHit = inside(mx, my, widget.x + widget.w - 18, widget.y, 18, widget.h)
+        if self._mouse.clicked and toggleHit then
+            widget.value = not widget.value
+            self._values[widget.id] = widget.value
+            if widget.callback then widget.callback(widget.value, widget.color, widget) end
+        end
+        if self._mouse.clicked and swatchHit then
+            widget.paletteIndex = widget.paletteIndex + 1
+            if widget.paletteIndex > #COLOR_PALETTE then widget.paletteIndex = 1 end
+            widget.color = COLOR_PALETTE[widget.paletteIndex]
+            if widget.callback then widget.callback(widget.value, widget.color, widget) end
+        end
+        local cx = widget.x + 7
+        local cy = widget.y + math_floor(widget.h / 2)
+        widget.dotOuter.Position = Vector2_new(cx, cy); widget.dotOuter.Radius = 5
+        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
+        widget.dotInner.Position = Vector2_new(cx, cy); widget.dotInner.Radius = 3
+        widget.dotInner.Color = theme.accent
+        setVisible(widget.dotOuter, true)
+        setVisible(widget.dotInner, widget.value == true)
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 13
+        widget.labelText.Color = widget.value and theme.text or theme.muted
+        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
+        setVisible(widget.labelText, true)
+        local sx = widget.x + widget.w - 8
+        widget.swatch.Position = Vector2_new(sx, cy)
+        widget.swatch.Radius = 5
+        widget.swatch.Color = isColor(widget.color) and widget.color or theme.white
+        setVisible(widget.swatch, true)
+
+    elseif widget.kind == "text" then
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 1)
+        setVisible(widget.labelText, true)
+    end
+end
+
+function Window:_handleDrag()
+    local mx, my = self._mouse.x, self._mouse.y
+    local headerHit = inside(mx, my, self.x, self.y, self.w, 36)
+    if self.visible and self._mouse.clicked and headerHit then
+        self._dragging = true
+        self._dragOffsetX = mx - self.x
+        self._dragOffsetY = my - self.y
+    end
+    if self._mouse.released then self._dragging = false end
+    if self._dragging and self._mouse.down then
+        self.x = math_floor(mx - self._dragOffsetX)
+        self.y = math_floor(my - self._dragOffsetY)
+    end
+end
+
+function Window:Step(_dt)
+    if self._destroyed then return end
+    self:_readMouse()
+    self:_handleHotkeys()
+    self:_handleDrag()
+    self:_layoutShell()
+    self:_layoutTabs()
+    self:_layoutSections()
+    self:_applyVisibility()
+end
+
+function Window:Pulse(seconds)
+    local untilTime = os_clock() + (seconds or 2)
+    while os_clock() < untilTime do
+        self:Step(0)
+        task.wait()
+    end
+end
+
+-- Demo -----------------------------------------------------------------------
+
+function VenusGUI:Demo(opts)
+    opts = opts or {}
+
+    local gui = VenusGUI.Create({
+        Title = opts.Title or "Venus Library",
+        Width = opts.Width or 380,
+        Height = opts.Height or 560,
+        ToggleKey = opts.ToggleKey or 0x70,
+        ConfigFolder = opts.ConfigFolder,
+    })
+
+    local aimbot = gui:Tab("Aimbot")
+    local visuals = gui:Tab("Visuals")
+    local misc = gui:Tab("Misc")
+    local settings = gui:Tab("Settings")
+
+    local configStatus
+    local configDropdown
+
+    local function setStatus(text)
+        text = asText(text)
+        if configStatus then configStatus.label = text end
+        print(text)
+    end
+
+    local function selectedConfigName()
+        if configDropdown then
+            local selected = asText(configDropdown:GetText())
+            if selected and selected ~= "" then return selected end
+        end
+        return asText(gui:GetValue("config_name") or "default")
+    end
+
+    local function selectConfig(name)
+        if not configDropdown then return end
+        for i, item in ipairs(configDropdown:GetItems()) do
+            if item == name then configDropdown:SetValue(i - 1); return end
+        end
+    end
+
+    local function refreshStatus()
+        local configs = gui:ListConfigs()
+        if configDropdown then configDropdown:SetItems(configs) end
+        if #configs == 0 then setStatus("No configs saved")
+        else setStatus("Selected: " .. selectedConfigName()) end
+    end
+
+    -- Aimbot tab matches the screenshot
+    local section = aimbot:Section("Section")
+    section:Text("Label")
+    section:Button("Button", function() setStatus("Button pressed") end)
+    section:Toggle("aim_toggle", "Toggle", false)
+    section:Box("aim_box", "Box", "")
+    section:SliderInt("aim_slider", "Slider", 0, 100, 20)
+    section:Combo("aim_dropdown", "", { "Option1", "Option2", "Option3" }, 0)
+    section:Keybind("aim_keybind", "Keybind", 0x41, "toggle")
+    section:ToggleKeybind("aim_toggle_keybind", "Toggle Keybind", false, 0x41, "toggle")
+    section:ColorPicker("aim_color", "Color Picker", 255, 0, 255)
+    section:ToggleColorPicker("aim_color_toggle", "Color Picker Toggle", false, 220, 70, 70)
+
+    -- Visuals tab
+    local esp = visuals:Section("ESP")
+    esp:Toggle("esp_enabled", "Enabled", true)
+    esp:Toggle("esp_boxes", "Boxes", true)
+    esp:Toggle("esp_names", "Names", true)
+    esp:SliderInt("esp_distance", "Max Distance", 100, 10000, 2500)
+    esp:ColorPicker("esp_color", "ESP Color", 201, 148, 160)
+
+    -- Misc tab
+    local movement = misc:Section("Movement")
+    movement:Toggle("bhop", "Bunny Hop", false)
+    movement:SliderInt("walk", "Walk Speed", 16, 250, 16)
+    movement:Keybind("move_key", "Movement Key", 0x47, "toggle")
+
+    -- Settings tab: full config system, same workflow as MatchaGUI
+    local createConfigs = settings:Section("Create Configs")
+    createConfigs:InputText("config_name", "Name", "", nil, { skipConfig = true })
+    createConfigs:Button("Create", function()
+        local name = asText(gui:GetValue("config_name"))
+        if name == "" then name = "default" end
+        local ok, msg = gui:SaveConfig(name)
+        if ok then
+            setStatus("Saved: " .. msg); refreshStatus(); selectConfig(name)
+        else
+            setStatus("Save failed: " .. tostring(msg))
+        end
+    end)
+
+    local configSettings = settings:Section("Config Settings")
+    configDropdown = configSettings:Combo("selected_config", "Saved Configs", {}, 0, function(_, text)
+        text = asText(text)
+        if text ~= "" then
+            gui:SetValue("config_name", text)
+            setStatus("Selected: " .. text)
+        end
+    end, { skipConfig = true })
+    configStatus = configSettings:Text("No configs saved")
+    configSettings:Button("Load", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:LoadConfig(name)
+        setStatus(ok and ("Loaded: " .. name) or ("Load failed: " .. tostring(msg)))
+    end)
+    configSettings:Button("Update", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:SaveConfig(name)
+        if ok then
+            setStatus("Updated: " .. msg); refreshStatus(); selectConfig(name)
+        else
+            setStatus("Update failed: " .. tostring(msg))
+        end
+    end)
+    configSettings:Button("Delete", function()
+        local name = selectedConfigName()
+        local ok, msg = gui:DeleteConfig(name)
+        if ok then setStatus("Deleted: " .. msg); refreshStatus()
+        else setStatus("Delete failed: " .. tostring(msg)) end
+    end)
+    configSettings:Button("Refresh", refreshStatus)
+
+    local other = settings:Section("Other")
+    other:Toggle("show_keybinds", "Show Keybinds", false)
+    other:MenuKeybind("menu_key", "Menu Key", 0x70)
+
+    gui:SetTab(opts.Tab or "Aimbot")
+    refreshStatus()
+
+    if opts.Start ~= false then gui:Start() end
+    if opts.Start ~= false and opts.Block ~= false then
+        while not gui._destroyed do task.wait(60) end
+    end
+
+    return gui
+end
+
+function VenusGUI:ShowDemoMenu(opts) return self:Demo(opts) end
+
+VenusGUI.KeyName = keyName
+VenusGUI.Theme = DEFAULT_THEME
+
+venus = VenusGUI
+Venus = VenusGUI
+VenusUI = VenusGUI
+_G.venus = VenusGUI
+_G.Venus = VenusGUI
+_G.VenusUI = VenusGUI
+
+return VenusGUI
