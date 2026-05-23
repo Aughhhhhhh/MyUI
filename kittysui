@@ -1519,19 +1519,16 @@ function Window:_layoutTabs()
     local activeTab = self._activeTab
     local theme = self.theme
 
-    -- Hide every page/section/widget by default; we'll re-enable the active ones.
+    -- Hide everything first. The active page's content will be re-shown below
+    -- AFTER the sub-tab click has been processed. Doing this in two phases
+    -- prevents stale widgets from the previously-active page from rendering on
+    -- top of the new page on the frame the user clicks a different sub-tab.
     for _, tab in ipairs(self._tabs) do
-        local isActiveTab = tab == activeTab and self.visible
         for _, page in ipairs(tab.pages) do
-            local isActivePage = isActiveTab and (tab._activePage == page)
-            if not isActiveTab then
-                hidePage(page)
-            end
-            if not isActivePage then
-                for _, section in ipairs(page.sections) do
-                    hideSection(section)
-                    for _, widget in ipairs(section.widgets) do hideWidget(widget) end
-                end
+            hidePage(page)
+            for _, section in ipairs(page.sections) do
+                hideSection(section)
+                for _, widget in ipairs(section.widgets) do hideWidget(widget) end
             end
         end
     end
