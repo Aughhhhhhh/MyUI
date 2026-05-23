@@ -1,7 +1,9 @@
--- VenusGUI
+-- VenusGUI / kittysui
 -- Drawing-based GUI for Matcha LuaVM scripts.
 -- Same architecture as MatchaGUI (config save/load, keybinds, slider editing,
--- dragging, hotkeys), restyled to match the Venus Library look.
+-- dragging, hotkeys), restyled to match the universal-style look:
+-- left icon sidebar, top sub-tabs, square checkboxes, sharp corners.
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/Aughhhhhhh/MyUI/refs/heads/main/kittysui",true))()
 
 local VenusGUI = {}
 
@@ -18,6 +20,8 @@ local FONT = Drawing.Fonts.Monospace
 pcall(function() FONT = Drawing.Fonts.System end)
 local FONT_BOLD = FONT
 pcall(function() FONT_BOLD = Drawing.Fonts.SystemBold end)
+
+-- Key handling --------------------------------------------------------------
 
 local KEY_NAMES = {
     [0x01] = "LMB",
@@ -64,32 +68,37 @@ local TEXT_BLOCK_KEYS = {
 }
 
 local DEFAULT_THEME = {
-    bg          = Color3_fromRGB(24, 24, 24),
-    card        = Color3_fromRGB(32, 32, 32),
-    panel       = Color3_fromRGB(38, 38, 38),
-    panel2      = Color3_fromRGB(48, 48, 48),
-    hover       = Color3_fromRGB(58, 58, 58),
-    stroke      = Color3_fromRGB(60, 60, 60),
-    stroke2     = Color3_fromRGB(80, 80, 80),
-    text        = Color3_fromRGB(235, 235, 235),
-    muted       = Color3_fromRGB(155, 155, 155),
-    accent      = Color3_fromRGB(201, 148, 160),
-    accent2     = Color3_fromRGB(220, 175, 188),
+    bg          = Color3_fromRGB(15, 15, 18),
+    card        = Color3_fromRGB(22, 22, 26),
+    sidebar     = Color3_fromRGB(18, 18, 22),
+    panel       = Color3_fromRGB(28, 28, 34),
+    panel2      = Color3_fromRGB(36, 36, 44),
+    hover       = Color3_fromRGB(44, 44, 54),
+    stroke      = Color3_fromRGB(40, 40, 50),
+    stroke2     = Color3_fromRGB(60, 60, 75),
+    text        = Color3_fromRGB(225, 225, 230),
+    muted       = Color3_fromRGB(105, 105, 120),
+    muted2      = Color3_fromRGB(70, 70, 80),
+    accent      = Color3_fromRGB(95, 110, 255),
+    accent2     = Color3_fromRGB(115, 130, 255),
+    border      = Color3_fromRGB(80, 80, 160),
     danger      = Color3_fromRGB(220, 70, 70),
-    control     = Color3_fromRGB(50, 50, 50),
-    control2    = Color3_fromRGB(40, 40, 40),
+    control     = Color3_fromRGB(34, 34, 42),
+    control2    = Color3_fromRGB(28, 28, 36),
     white       = Color3_fromRGB(255, 255, 255),
     shadow      = Color3_fromRGB(0, 0, 0),
 }
 
 local COLOR_PALETTE = {
-    Color3_fromRGB(255, 105, 180),
+    Color3_fromRGB(95, 110, 255),
+    Color3_fromRGB(255, 255, 255),
     Color3_fromRGB(220, 70, 70),
     Color3_fromRGB(43, 214, 158),
     Color3_fromRGB(255, 210, 84),
-    Color3_fromRGB(110, 160, 255),
-    Color3_fromRGB(255, 255, 255),
+    Color3_fromRGB(240, 142, 214),
 }
+
+-- Helpers -------------------------------------------------------------------
 
 local function copyTheme(overrides)
     local theme = {}
@@ -293,6 +302,8 @@ local function isColor(value)
     return ok and r ~= nil and g ~= nil and b ~= nil
 end
 
+-- Config encode/decode ------------------------------------------------------
+
 local function encodeValue(widget)
     if widget.skipConfig then return nil end
     if widget.kind == "button" or widget.kind == "text" then return nil end
@@ -302,26 +313,16 @@ local function encodeValue(widget)
     if widget.kind == "menu_keybind" then
         return { type = "menu_keybind", key = widget.key or widget.value }
     end
-    if widget.kind == "toggle_keybind" then
-        return {
-            type = "toggle_keybind",
-            value = widget.value == true,
-            key = widget.key,
-            active = widget.bindActive == true,
-        }
-    end
     if widget.kind == "color_picker" then
         if not isColor(widget.value) then return nil end
         return { type = "color", r = widget.value.R, g = widget.value.G, b = widget.value.B }
     end
-    if widget.kind == "toggle_color" then
-        local color = widget.color
-        local cr, cg, cb = 1, 1, 1
-        if isColor(color) then cr, cg, cb = color.R, color.G, color.B end
+    if widget.kind == "toggle" and widget.bindKey then
         return {
-            type = "toggle_color",
+            type = "toggle",
             value = widget.value == true,
-            r = cr, g = cg, b = cb,
+            key = widget.bindKey,
+            mode = widget.bindMode,
         }
     end
     if isColor(widget.value) then
@@ -340,11 +341,6 @@ local function decodeValue(widget, packed)
         local key = asNumber(packed.key, asNumber(packed.value, widget.key))
         return key, key ~= nil
     end
-    if widget.kind == "toggle_keybind" then
-        widget.key = asNumber(packed.key, widget.key)
-        widget.bindActive = packed.active == true
-        return packed.value == true, true
-    end
     if widget.kind == "color_picker" then
         if type(packed.r) == "number" and type(packed.g) == "number" and type(packed.b) == "number" then
             return Color3.new(packed.r, packed.g, packed.b), true
@@ -352,10 +348,9 @@ local function decodeValue(widget, packed)
         if isColor(packed.value) then return packed.value, true end
         return nil, false
     end
-    if widget.kind == "toggle_color" then
-        if type(packed.r) == "number" and type(packed.g) == "number" and type(packed.b) == "number" then
-            widget.color = Color3.new(packed.r, packed.g, packed.b)
-        end
+    if widget.kind == "toggle" then
+        if packed.key ~= nil then widget.bindKey = asNumber(packed.key, widget.bindKey) end
+        if packed.mode ~= nil then widget.bindMode = packed.mode end
         return packed.value == true, true
     end
     if widget.kind == "input_text" then
@@ -370,7 +365,7 @@ local function decodeValue(widget, packed)
     return packed, true
 end
 
--- Drawing helpers ------------------------------------------------------------
+-- Drawing primitives --------------------------------------------------------
 
 local function createDrawing(owner, typ, props)
     local obj = Drawing_new(typ)
@@ -416,6 +411,18 @@ local function makeBox(owner, color, z)
     })
 end
 
+local function makeLineBox(owner, color, z)
+    return createDrawing(owner, "Square", {
+        Color = color,
+        Filled = false,
+        Visible = true,
+        Thickness = 1,
+        ZIndex = z or 51,
+        Position = Vector2_new(0, 0),
+        Size = Vector2_new(1, 1),
+    })
+end
+
 local function makeLine(owner, color, z)
     return createDrawing(owner, "Line", {
         Color = color,
@@ -427,23 +434,10 @@ local function makeLine(owner, color, z)
     })
 end
 
-local function makeFilledCircle(owner, color, z)
+local function makeCircle(owner, color, filled, z)
     return createDrawing(owner, "Circle", {
         Color = color,
-        Filled = true,
-        Visible = true,
-        Thickness = 1,
-        NumSides = 24,
-        ZIndex = z or 50,
-        Position = Vector2_new(0, 0),
-        Radius = 1,
-    })
-end
-
-local function makeOutlineCircle(owner, color, z)
-    return createDrawing(owner, "Circle", {
-        Color = color,
-        Filled = false,
+        Filled = filled and true or false,
         Visible = true,
         Thickness = 1,
         NumSides = 24,
@@ -453,82 +447,109 @@ local function makeOutlineCircle(owner, color, z)
     })
 end
 
--- Rounded rectangle (filled): 2 squares + 4 corner circles ------------------
-
-local function makeRoundedFill(owner, z)
-    return {
-        s1 = makeBox(owner, owner.theme.panel, z),
-        s2 = makeBox(owner, owner.theme.panel, z),
-        c1 = makeFilledCircle(owner, owner.theme.panel, z),
-        c2 = makeFilledCircle(owner, owner.theme.panel, z),
-        c3 = makeFilledCircle(owner, owner.theme.panel, z),
-        c4 = makeFilledCircle(owner, owner.theme.panel, z),
-    }
+local function makeTriangle(owner, color, z)
+    return createDrawing(owner, "Triangle", {
+        Color = color,
+        Filled = true,
+        Visible = true,
+        Thickness = 1,
+        ZIndex = z or 70,
+        PointA = Vector2_new(0, 0),
+        PointB = Vector2_new(0, 0),
+        PointC = Vector2_new(0, 0),
+    })
 end
 
-local function layoutRoundedFill(rf, x, y, w, h, r, color)
-    if w < 2 then w = 2 end
-    if h < 2 then h = 2 end
-    r = math_min(r, math_floor(math_min(w, h) / 2))
-    if r < 1 then r = 1 end
-    rf.s1.Position = Vector2_new(x + r, y)
-    rf.s1.Size = Vector2_new(w - r * 2, h)
-    rf.s2.Position = Vector2_new(x, y + r)
-    rf.s2.Size = Vector2_new(w, h - r * 2)
-    rf.c1.Position = Vector2_new(x + r, y + r); rf.c1.Radius = r
-    rf.c2.Position = Vector2_new(x + w - r, y + r); rf.c2.Radius = r
-    rf.c3.Position = Vector2_new(x + r, y + h - r); rf.c3.Radius = r
-    rf.c4.Position = Vector2_new(x + w - r, y + h - r); rf.c4.Radius = r
-    if color then
-        rf.s1.Color = color; rf.s2.Color = color
-        rf.c1.Color = color; rf.c2.Color = color
-        rf.c3.Color = color; rf.c4.Color = color
+-- Icons (drawn from primitives) --------------------------------------------
+
+local function makeIcon(owner, kind)
+    local icon = { kind = kind, parts = {} }
+    if kind == "crosshair" then
+        icon.parts.ring = makeCircle(owner, owner.theme.muted, false, 60)
+        icon.parts.dot  = makeCircle(owner, owner.theme.muted, true,  61)
+        icon.parts.l1 = makeLine(owner, owner.theme.muted, 61)
+        icon.parts.l2 = makeLine(owner, owner.theme.muted, 61)
+        icon.parts.l3 = makeLine(owner, owner.theme.muted, 61)
+        icon.parts.l4 = makeLine(owner, owner.theme.muted, 61)
+    elseif kind == "circle" then
+        icon.parts.ring = makeCircle(owner, owner.theme.muted, false, 60)
+    elseif kind == "eye" then
+        icon.parts.outer = makeCircle(owner, owner.theme.muted, false, 60)
+        icon.parts.inner = makeCircle(owner, owner.theme.muted, true,  61)
+    elseif kind == "menu" then
+        icon.parts.l1 = makeLine(owner, owner.theme.muted, 60)
+        icon.parts.l2 = makeLine(owner, owner.theme.muted, 60)
+        icon.parts.l3 = makeLine(owner, owner.theme.muted, 60)
+    elseif kind == "folder" then
+        icon.parts.tab  = makeBox(owner, owner.theme.muted, 60)
+        icon.parts.body = makeBox(owner, owner.theme.muted, 61)
+    else
+        icon.parts.box = makeBox(owner, owner.theme.muted, 60)
+    end
+    return icon
+end
+
+local function layoutIcon(icon, cx, cy, color, visible)
+    local kind = icon.kind
+    local parts = icon.parts
+    if kind == "crosshair" then
+        parts.ring.Position = Vector2_new(cx, cy)
+        parts.ring.Radius = 11
+        parts.ring.Color = color
+        parts.dot.Position = Vector2_new(cx, cy)
+        parts.dot.Radius = 2
+        parts.dot.Color = color
+        parts.l1.From = Vector2_new(cx, cy - 16); parts.l1.To = Vector2_new(cx, cy - 8); parts.l1.Color = color
+        parts.l2.From = Vector2_new(cx, cy + 8);  parts.l2.To = Vector2_new(cx, cy + 16); parts.l2.Color = color
+        parts.l3.From = Vector2_new(cx - 16, cy); parts.l3.To = Vector2_new(cx - 8, cy);  parts.l3.Color = color
+        parts.l4.From = Vector2_new(cx + 8, cy);  parts.l4.To = Vector2_new(cx + 16, cy); parts.l4.Color = color
+        for _, p in pairs(parts) do setVisible(p, visible) end
+    elseif kind == "circle" then
+        parts.ring.Position = Vector2_new(cx, cy)
+        parts.ring.Radius = 11
+        parts.ring.Color = color
+        setVisible(parts.ring, visible)
+    elseif kind == "eye" then
+        parts.outer.Position = Vector2_new(cx, cy)
+        parts.outer.Radius = 10
+        parts.outer.Color = color
+        parts.inner.Position = Vector2_new(cx, cy)
+        parts.inner.Radius = 4
+        parts.inner.Color = color
+        setVisible(parts.outer, visible)
+        setVisible(parts.inner, visible)
+    elseif kind == "menu" then
+        parts.l1.From = Vector2_new(cx - 10, cy - 6); parts.l1.To = Vector2_new(cx + 10, cy - 6); parts.l1.Color = color
+        parts.l2.From = Vector2_new(cx - 10, cy);     parts.l2.To = Vector2_new(cx + 10, cy);     parts.l2.Color = color
+        parts.l3.From = Vector2_new(cx - 10, cy + 6); parts.l3.To = Vector2_new(cx + 10, cy + 6); parts.l3.Color = color
+        parts.l1.Thickness = 2; parts.l2.Thickness = 2; parts.l3.Thickness = 2
+        setVisible(parts.l1, visible); setVisible(parts.l2, visible); setVisible(parts.l3, visible)
+    elseif kind == "folder" then
+        parts.tab.Position  = Vector2_new(cx - 10, cy - 7)
+        parts.tab.Size      = Vector2_new(8, 4)
+        parts.tab.Color     = color
+        parts.body.Position = Vector2_new(cx - 11, cy - 4)
+        parts.body.Size     = Vector2_new(22, 14)
+        parts.body.Color    = color
+        setVisible(parts.tab, visible); setVisible(parts.body, visible)
+    else
+        parts.box.Position = Vector2_new(cx - 8, cy - 8)
+        parts.box.Size     = Vector2_new(16, 16)
+        parts.box.Color    = color
+        setVisible(parts.box, visible)
     end
 end
 
-local function setRoundedFillVisible(rf, visible)
-    setVisible(rf.s1, visible); setVisible(rf.s2, visible)
-    setVisible(rf.c1, visible); setVisible(rf.c2, visible)
-    setVisible(rf.c3, visible); setVisible(rf.c4, visible)
-end
-
--- Rounded border: 4 lines for the flat edges; corners come from a slightly
--- larger fill rendered behind ------------------------------------------------
-
-local function makeRoundedBorder(owner, z)
-    return {
-        l1 = makeLine(owner, owner.theme.stroke, z),
-        l2 = makeLine(owner, owner.theme.stroke, z),
-        l3 = makeLine(owner, owner.theme.stroke, z),
-        l4 = makeLine(owner, owner.theme.stroke, z),
-    }
-end
-
-local function layoutRoundedBorder(rb, x, y, w, h, r, color)
-    r = math_min(r, math_floor(math_min(w, h) / 2))
-    if r < 1 then r = 1 end
-    rb.l1.From = Vector2_new(x + r, y);     rb.l1.To = Vector2_new(x + w - r, y)
-    rb.l2.From = Vector2_new(x + r, y + h - 1); rb.l2.To = Vector2_new(x + w - r, y + h - 1)
-    rb.l3.From = Vector2_new(x, y + r);     rb.l3.To = Vector2_new(x, y + h - r)
-    rb.l4.From = Vector2_new(x + w - 1, y + r); rb.l4.To = Vector2_new(x + w - 1, y + h - r)
-    if color then
-        rb.l1.Color = color; rb.l2.Color = color
-        rb.l3.Color = color; rb.l4.Color = color
-    end
-end
-
-local function setRoundedBorderVisible(rb, visible)
-    setVisible(rb.l1, visible); setVisible(rb.l2, visible)
-    setVisible(rb.l3, visible); setVisible(rb.l4, visible)
-end
-
--- Classes --------------------------------------------------------------------
+-- Classes -------------------------------------------------------------------
 
 local Window = {}
 Window.__index = Window
 
 local Tab = {}
 Tab.__index = Tab
+
+local Page = {}
+Page.__index = Page
 
 local Section = {}
 Section.__index = Section
@@ -538,11 +559,14 @@ function VenusGUI.Create(opts)
 
     local self = setmetatable({}, Window)
     self.title = asText(opts.Title or opts.title)
-    if self.title == "" then self.title = "Venus Library" end
-    self.x = opts.X or opts.x or 100
-    self.y = opts.Y or opts.y or 100
-    self.w = opts.Width or opts.width or 380
-    self.h = opts.Height or opts.height or 560
+    if self.title == "" then self.title = "universal" end
+    self.version = asText(opts.Version or opts.version)
+    if self.version == "" then self.version = "v1" end
+
+    self.x = opts.X or opts.x or 120
+    self.y = opts.Y or opts.y or 80
+    self.w = opts.Width or opts.width or 720
+    self.h = opts.Height or opts.height or 460
     self.toggleKey = opts.ToggleKey or opts.toggleKey or 0x70
     self.configFolder = opts.ConfigFolder or opts.configFolder or joinPath("VenusGUI", cleanName(self.title))
     self.visible = opts.Visible
@@ -572,27 +596,39 @@ function VenusGUI.Create(opts)
     self._connection = nil
     self._destroyed = false
 
-    -- Outer card: bigger rounded fill (border color) behind, smaller fill on top
-    self.cardBorder = makeRoundedFill(self, 40)
-    self.card = makeRoundedFill(self, 41)
+    -- Outer frame
+    self.borderOuter = makeLineBox(self, self.theme.border, 41)
+    self.cardBg      = makeBox(self, self.theme.card, 42)
+    self.titleBar    = makeBox(self, self.theme.bg, 43)
+    self.titleSep    = makeBox(self, self.theme.border, 44)
+    self.sidebarBg   = makeBox(self, self.theme.sidebar, 44)
+    self.sidebarSep  = makeBox(self, self.theme.border, 45)
+    self.bodyBg      = makeBox(self, self.theme.card, 44)
+    self.tabBarSep   = makeBox(self, self.theme.stroke, 45)
 
     -- Title
-    self.titleText = makeText(self, self.title, 14, self.theme.text, 70)
+    self.titleText = makeText(self, self.title, 13, self.theme.text, 70)
     self.titleText.Font = FONT_BOLD
+    self.versionText = makeText(self, self.version, 13, self.theme.accent, 70)
+    self.versionText.Font = FONT_BOLD
 
     return self
 end
 
-function Window:Tab(name)
+function Window:Tab(name, opts)
+    opts = opts or {}
+    if type(opts) == "string" then opts = { Icon = opts } end
+
     local tab = setmetatable({}, Tab)
     tab.window = self
     tab.name = name or ("Tab " .. tostring(#self._tabs + 1))
-    tab.sections = {}
+    tab.icon = makeIcon(self, opts.Icon or opts.icon or "menu")
+    tab.pages = {}
+    tab._defaultPage = nil
+    tab._activePage = nil
 
-    -- Tab pill: rounded fill that lights up only when active
-    tab.pill = makeRoundedFill(self, 50)
-    tab.label = makeText(self, tab.name, 13, self.theme.muted, 70)
-    tab.label.Font = FONT_BOLD
+    -- Sidebar accent bar (left edge accent strip when active)
+    tab.accentBar = makeBox(self, self.theme.accent, 50)
 
     table.insert(self._tabs, tab)
     if not self._activeTab then self._activeTab = tab end
@@ -609,24 +645,68 @@ function Window:SetTab(nameOrIndex)
     return false
 end
 
+local function newPage(tab, name)
+    local page = setmetatable({}, Page)
+    page.tab = tab
+    page.window = tab.window
+    page.name = asText(name)
+    if page.name == "" then page.name = "main" end
+    page.sections = {}
+
+    page.tabBox = makeBox(tab.window, tab.window.theme.card, 50)
+    page.tabLabel = makeText(tab.window, page.name, 13, tab.window.theme.muted, 70)
+    page.tabLabel.Center = true
+    page.tabUnderline = makeBox(tab.window, tab.window.theme.accent, 51)
+
+    table.insert(tab.pages, page)
+    if not tab._activePage then tab._activePage = page end
+    return page
+end
+
+function Tab:Page(name)
+    return newPage(self, name)
+end
+
+function Tab:SetPage(nameOrIndex)
+    for i, page in ipairs(self.pages) do
+        if page.name == nameOrIndex or i == nameOrIndex then
+            self._activePage = page
+            return true
+        end
+    end
+    return false
+end
+
+-- Backward-compat: tab:Section(name) creates an implicit default page.
 function Tab:Section(name, _side)
-    -- side argument kept for compatibility with MatchaGUI but ignored here:
-    -- Venus layout is single-column.
+    if not self._defaultPage then
+        self._defaultPage = newPage(self, "main")
+    end
+    return self._defaultPage:Section(name)
+end
+
+function Page:Section(name)
     local section = setmetatable({}, Section)
-    section.tab = self
+    section.page = self
+    section.tab = self.tab
     section.window = self.window
     section.name = asText(name)
-    if section.name == "" then section.name = "Section" end
+    if section.name == "" then section.name = "main" end
     section.widgets = {}
 
-    section.fillBorder = makeRoundedFill(self.window, 50)
-    section.fill = makeRoundedFill(self.window, 51)
-    section.header = makeText(self.window, section.name, 12, self.window.theme.text, 70)
-    section.header.Font = FONT_BOLD
+    section.borderTopLeft   = makeLine(self.window, self.window.theme.stroke, 51)
+    section.borderTopRight  = makeLine(self.window, self.window.theme.stroke, 51)
+    section.borderBottom    = makeLine(self.window, self.window.theme.stroke, 51)
+    section.borderLeft      = makeLine(self.window, self.window.theme.stroke, 51)
+    section.borderRight     = makeLine(self.window, self.window.theme.stroke, 51)
+    section.header = makeText(self.window, section.name, 12, self.window.theme.muted, 70)
+    section.header.Center = true
 
     table.insert(self.sections, section)
     return section
 end
+
+-- Widget creation -----------------------------------------------------------
 
 function Section:_addWidget(kind, id, label, opts)
     opts = opts or {}
@@ -649,11 +729,13 @@ function Section:_addWidget(kind, id, label, opts)
         mode = opts.mode,
         items = opts.items or {},
         key = opts.key,
+        bindKey = opts.bindKey,
+        bindMode = opts.bindMode,
         bindActive = false,
+        listeningBind = false,
         lastKeyDown = false,
         listening = false,
         paletteIndex = opts.paletteIndex or 1,
-        color = opts.color,
         x = 0, y = 0, w = 1, h = opts.h or 22,
     }
 
@@ -661,66 +743,50 @@ function Section:_addWidget(kind, id, label, opts)
 
     if kind == "toggle" then
         widget.h = 18
-        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
-        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
-        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
+        widget.box = makeBox(win, win.theme.control, 60)
+        widget.boxBorder = makeLineBox(win, win.theme.stroke2, 61)
+        widget.tick = makeBox(win, win.theme.accent, 62)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.muted, 70)
+        widget.bindText = makeText(win, "", 11, win.theme.muted, 70)
     elseif kind == "slider" then
-        widget.h = 22
-        widget.fillBorder = makeRoundedFill(win, 60)
-        widget.fillBg = makeRoundedFill(win, 61)
-        widget.fillBar = makeRoundedFill(win, 62)
+        widget.h = 32
         widget.labelText = makeText(win, "", 12, win.theme.text, 70)
-        widget.labelText.Center = true
-        widget.editBox = makeRoundedFill(win, 80)
-        widget.editBorder = makeRoundedBorder(win, 81)
+        widget.track = makeBox(win, win.theme.control2, 60)
+        widget.trackBorder = makeLineBox(win, win.theme.stroke, 61)
+        widget.fill = makeBox(win, win.theme.accent, 62)
+        widget.editBox = makeBox(win, win.theme.control2, 63)
+        widget.editBorder = makeLineBox(win, win.theme.accent, 64)
+        widget.editText = nil
     elseif kind == "button" then
         widget.h = 22
-        widget.fillBorder = makeRoundedFill(win, 60)
-        widget.fill = makeRoundedFill(win, 61)
+        widget.box = makeBox(win, win.theme.panel, 60)
+        widget.boxBorder = makeLineBox(win, win.theme.stroke, 61)
         widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
         widget.labelText.Center = true
-        widget.labelText.Font = FONT_BOLD
     elseif kind == "keybind" then
         widget.h = 18
-        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
-        widget.labelText.Font = FONT_BOLD
-        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.valueText = makeText(win, "", 11, win.theme.muted, 70)
     elseif kind == "menu_keybind" then
         widget.h = 18
-        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
-        widget.labelText.Font = FONT_BOLD
-        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
-    elseif kind == "toggle_keybind" then
-        widget.h = 18
-        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
-        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
-        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
-        widget.valueText = makeText(win, "", 12, win.theme.text, 70)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.valueText = makeText(win, "", 11, win.theme.muted, 70)
     elseif kind == "input_text" then
-        widget.h = 22
-        widget.fillBorder = makeRoundedFill(win, 60)
-        widget.fill = makeRoundedFill(win, 61)
-        widget.labelText = makeText(win, widget.label, 12, win.theme.muted, 70)
+        widget.h = 32
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.box = makeBox(win, win.theme.control, 60)
+        widget.boxBorder = makeLineBox(win, win.theme.stroke, 61)
         widget.valueText = makeText(win, "", 12, win.theme.text, 70)
-        widget.valueText.Center = true
     elseif kind == "combo" then
-        widget.h = 22
+        widget.h = 32
         widget.open = false
-        widget.fillBorder = makeRoundedFill(win, 60)
-        widget.fill = makeRoundedFill(win, 61)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.box = makeBox(win, win.theme.control, 60)
+        widget.boxBorder = makeLineBox(win, win.theme.stroke, 61)
         widget.valueText = makeText(win, "", 12, win.theme.text, 70)
-        widget.arrow = createDrawing(win, "Triangle", {
-            Color = win.theme.muted,
-            Filled = true,
-            Visible = true,
-            Thickness = 1,
-            ZIndex = 70,
-            PointA = Vector2_new(0, 0),
-            PointB = Vector2_new(0, 0),
-            PointC = Vector2_new(0, 0),
-        })
-        widget.dropdownBorder = makeRoundedFill(win, 90)
-        widget.dropdown = makeRoundedFill(win, 91)
+        widget.arrow = makeTriangle(win, win.theme.muted, 70)
+        widget.dropdown = makeBox(win, win.theme.control, 90)
+        widget.dropdownBorder = makeLineBox(win, win.theme.accent, 91)
         widget.optionTexts = {}
         widget.optionHovers = {}
         for i = 1, 6 do
@@ -729,19 +795,12 @@ function Section:_addWidget(kind, id, label, opts)
         end
     elseif kind == "color_picker" then
         widget.h = 18
-        widget.labelText = makeText(win, widget.label, 13, win.theme.text, 70)
-        widget.labelText.Font = FONT_BOLD
-        widget.dot = makeFilledCircle(win, opts.color or win.theme.white, 70)
-    elseif kind == "toggle_color" then
-        widget.h = 18
-        widget.color = opts.color or win.theme.white
-        widget.dotOuter = makeOutlineCircle(win, win.theme.muted, 60)
-        widget.dotInner = makeFilledCircle(win, win.theme.accent, 61)
-        widget.labelText = makeText(win, widget.label, 13, win.theme.muted, 70)
-        widget.swatch = makeFilledCircle(win, widget.color, 70)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.swatch = makeBox(win, opts.color or win.theme.white, 60)
+        widget.swatchBorder = makeLineBox(win, win.theme.stroke, 61)
     elseif kind == "text" then
         widget.h = opts.h or 16
-        widget.labelText = makeText(win, widget.label, 12, win.theme.text, 70)
+        widget.labelText = makeText(win, widget.label, 12, win.theme.muted, 70)
     end
 
     table.insert(self.widgets, widget)
@@ -783,15 +842,26 @@ function Section:_addWidget(kind, id, label, opts)
         widget:SetItems(widget.items)
     end
 
+    if kind == "toggle" then
+        function widget:SetKeybind(vk, mode)
+            self.bindKey = asNumber(vk, self.bindKey)
+            if mode then self.bindMode = mode end
+            return self
+        end
+    end
+
     return widget
 end
 
--- Public Section API ---------------------------------------------------------
+-- Public Section API --------------------------------------------------------
 
-function Section:Toggle(id, label, default, callback)
+function Section:Toggle(id, label, default, callback, opts)
+    opts = opts or {}
     return self:_addWidget("toggle", id, label, {
         value = default == true,
         callback = callback,
+        bindKey = opts.Keybind or opts.keybind,
+        bindMode = opts.KeybindMode or opts.keybindMode or "toggle",
     })
 end
 
@@ -841,17 +911,8 @@ end
 function Section:MenuKeybind(id, label, defaultKey, callback)
     local key = defaultKey or self.window.toggleKey or 0x70
     self.window:SetMenuKey(key)
-    return self:_addWidget("menu_keybind", id, label or "Menu key", {
+    return self:_addWidget("menu_keybind", id, label or "Menu Key", {
         value = key, key = key, mode = "menu", callback = callback,
-    })
-end
-
-function Section:ToggleKeybind(id, label, default, defaultKey, mode, callback)
-    return self:_addWidget("toggle_keybind", id, label, {
-        value = default == true,
-        key = defaultKey or 0x46,
-        mode = mode or "toggle",
-        callback = callback,
     })
 end
 
@@ -863,21 +924,10 @@ function Section:InputText(id, label, default, callback, options)
     })
 end
 
-function Section:Box(id, label, default, callback, options)
-    return self:InputText(id, label, default, callback, options)
-end
-
 function Section:ColorPicker(id, label, r, g, b, _a, callback)
     local color = Color3_fromRGB(r or 255, g or 255, b or 255)
     return self:_addWidget("color_picker", id, label, {
         value = color, color = color, callback = callback,
-    })
-end
-
-function Section:ToggleColorPicker(id, label, default, r, g, b, callback)
-    local color = Color3_fromRGB(r or 255, g or 255, b or 255)
-    return self:_addWidget("toggle_color", id, label, {
-        value = default == true, color = color, callback = callback,
     })
 end
 
@@ -887,7 +937,7 @@ end
 
 function Section:Label(text) return self:Text(text) end
 
--- Window value / config API --------------------------------------------------
+-- Window value / config API -------------------------------------------------
 
 function Window:GetValue(id)
     local widget = self._widgetsById[id]
@@ -1021,8 +1071,11 @@ function Window:IsKeyActive(id)
     local widget = self._widgetsById[id]
     if not widget then return false end
     if widget.kind == "keybind" then return widget.value == true end
-    if widget.kind == "toggle_keybind" then
-        return widget.value == true and widget.bindActive == true
+    if widget.kind == "toggle" then
+        if widget.bindKey then
+            return widget.value == true and widget.bindActive == true
+        end
+        return widget.value == true
     end
     return false
 end
@@ -1033,12 +1086,14 @@ function Window:SetMenuKey(vk)
     self.toggleKey = vk
     self._lastToggleKey = readKey(vk)
     for _, tab in ipairs(self._tabs) do
-        for _, section in ipairs(tab.sections) do
-            for _, widget in ipairs(section.widgets) do
-                if widget.kind == "menu_keybind" then
-                    widget.key = vk
-                    widget.value = vk
-                    self._values[widget.id] = vk
+        for _, page in ipairs(tab.pages) do
+            for _, section in ipairs(page.sections) do
+                for _, widget in ipairs(section.widgets) do
+                    if widget.kind == "menu_keybind" then
+                        widget.key = vk
+                        widget.value = vk
+                        self._values[widget.id] = vk
+                    end
                 end
             end
         end
@@ -1099,7 +1154,7 @@ function Window:Destroy()
     removeAll(self._drawings)
 end
 
--- Mouse / hotkeys ------------------------------------------------------------
+-- Mouse / hotkeys ----------------------------------------------------------
 
 function Window:_readMouse()
     local mx, my = self._mouse.x, self._mouse.y
@@ -1144,7 +1199,11 @@ function Window:_beginSliderEdit(widget)
         self._activeCombo = nil
     end
     if self._listeningBind then
-        self._listeningBind.listening = false
+        if self._listeningBind.kind == "toggle" then
+            self._listeningBind.listeningBind = false
+        else
+            self._listeningBind.listening = false
+        end
         self._listeningBind = nil
     end
     self._activeSlider = nil
@@ -1186,17 +1245,13 @@ function Window:_handleHotkeys()
                     if vk == 0x0D then
                         local ok = applySliderValue(self, widget, tonumber(value))
                         if ok then
-                            self:_clearSliderEdit(widget)
-                            break
+                            self:_clearSliderEdit(widget); break
                         end
                         widget.editInvalid = true
                     elseif vk == 0x1B then
                         self:_clearSliderEdit(widget); break
                     elseif vk == 0x08 then
-                        if #value > 0 then
-                            value = string.sub(value, 1, #value - 1)
-                            changed = true
-                        end
+                        if #value > 0 then value = string.sub(value, 1, #value - 1); changed = true end
                     elseif vk == 0x2E then
                         value = ""; changed = true
                     else
@@ -1207,9 +1262,7 @@ function Window:_handleHotkeys()
                                     value = value .. ch; changed = true
                                 end
                             elseif ch == "-" or ch == "+" then
-                                if #value == 0 then
-                                    value = value .. ch; changed = true
-                                end
+                                if #value == 0 then value = value .. ch; changed = true end
                             else
                                 value = value .. ch; changed = true
                             end
@@ -1233,19 +1286,12 @@ function Window:_handleHotkeys()
             local wasDown = self._textLastKeys[vk] == true
             if keyDown and not wasDown then
                 if vk == 0x0D or vk == 0x1B then
-                    self._activeText = nil
-                    self._textLastKeys = {}
-                    break
+                    self._activeText = nil; self._textLastKeys = {}; break
                 elseif vk == 0x08 then
-                    if #value > 0 then
-                        value = string.sub(value, 1, #value - 1)
-                        changed = true
-                    end
+                    if #value > 0 then value = string.sub(value, 1, #value - 1); changed = true end
                 else
                     local ch = charFromKey(vk)
-                    if ch and #value < 64 then
-                        value = value .. ch; changed = true
-                    end
+                    if ch and #value < 64 then value = value .. ch; changed = true end
                 end
             end
             self._textLastKeys[vk] = keyDown
@@ -1263,13 +1309,21 @@ function Window:_handleHotkeys()
         local target = self._listeningBind
         for _, vk in ipairs(KEY_SCAN) do
             if readKey(vk) then
-                if target.kind == "menu_keybind" then
-                    self:SetMenuKey(vk)
-                    if target.callback then target.callback(vk, target) end
+                if vk == 0x1B then
+                    -- Esc clears the binding for toggles, otherwise it just cancels
+                    if target.kind == "toggle" then target.bindKey = nil end
                 else
-                    target.key = vk
+                    if target.kind == "menu_keybind" then
+                        self:SetMenuKey(vk)
+                        if target.callback then target.callback(vk, target) end
+                    elseif target.kind == "toggle" then
+                        target.bindKey = vk
+                    else
+                        target.key = vk
+                    end
                 end
-                target.listening = false
+                if target.kind == "toggle" then target.listeningBind = false
+                else target.listening = false end
                 self._listeningBind = nil
                 break
             end
@@ -1277,35 +1331,37 @@ function Window:_handleHotkeys()
     end
 
     for _, tab in ipairs(self._tabs) do
-        for _, section in ipairs(tab.sections) do
-            for _, widget in ipairs(section.widgets) do
-                if widget.kind == "keybind" and widget.key then
-                    local keyDown = readKey(widget.key)
-                    local old = widget.value
-                    if widget.mode == "hold" then
-                        widget.value = keyDown
-                    elseif keyDown and not widget.lastKeyDown then
-                        widget.value = not widget.value
-                    end
-                    if old ~= widget.value then
-                        self._values[widget.id] = widget.value
-                        if widget.callback then
-                            widget.callback(widget.value, widget.key, widget)
+        for _, page in ipairs(tab.pages) do
+            for _, section in ipairs(page.sections) do
+                for _, widget in ipairs(section.widgets) do
+                    if widget.kind == "keybind" and widget.key then
+                        local keyDown = readKey(widget.key)
+                        local old = widget.value
+                        if widget.mode == "hold" then
+                            widget.value = keyDown
+                        elseif keyDown and not widget.lastKeyDown then
+                            widget.value = not widget.value
                         end
+                        if old ~= widget.value then
+                            self._values[widget.id] = widget.value
+                            if widget.callback then
+                                widget.callback(widget.value, widget.key, widget)
+                            end
+                        end
+                        widget.lastKeyDown = keyDown
+                    elseif widget.kind == "toggle" and widget.bindKey then
+                        local keyDown = readKey(widget.bindKey)
+                        local oldActive = widget.bindActive
+                        if widget.bindMode == "hold" then
+                            widget.bindActive = keyDown
+                        elseif keyDown and not widget.lastKeyDown then
+                            widget.bindActive = not widget.bindActive
+                        end
+                        if oldActive ~= widget.bindActive and widget.callback then
+                            widget.callback(widget.value, widget.bindKey, widget.bindActive, widget)
+                        end
+                        widget.lastKeyDown = keyDown
                     end
-                    widget.lastKeyDown = keyDown
-                elseif widget.kind == "toggle_keybind" and widget.key then
-                    local keyDown = readKey(widget.key)
-                    local oldActive = widget.bindActive
-                    if widget.mode == "hold" then
-                        widget.bindActive = keyDown
-                    elseif keyDown and not widget.lastKeyDown then
-                        widget.bindActive = not widget.bindActive
-                    end
-                    if oldActive ~= widget.bindActive and widget.callback then
-                        widget.callback(widget.value, widget.key, widget.bindActive, widget)
-                    end
-                    widget.lastKeyDown = keyDown
                 end
             end
         end
@@ -1319,141 +1375,139 @@ function Window:_applyVisibility()
     end
 end
 
--- Layout ---------------------------------------------------------------------
+-- Layout --------------------------------------------------------------------
+
+local TITLE_H = 24
+local SIDEBAR_W = 70
+local TAB_BAR_H = 36
 
 function Window:_layoutShell()
     local x, y, w, h = self.x, self.y, self.w, self.h
     local theme = self.theme
     local visible = self.visible
 
-    local r = 8
-    layoutRoundedFill(self.cardBorder, x - 1, y - 1, w + 2, h + 2, r + 1, theme.stroke2)
-    layoutRoundedFill(self.card, x, y, w, h, r, theme.card)
-    setRoundedFillVisible(self.cardBorder, visible)
-    setRoundedFillVisible(self.card, visible)
+    self.borderOuter.Position = Vector2_new(x, y)
+    self.borderOuter.Size = Vector2_new(w, h)
+    self.borderOuter.Color = theme.border
+    self.borderOuter.Thickness = 2
+    setVisible(self.borderOuter, visible)
+
+    self.cardBg.Position = Vector2_new(x + 1, y + 1)
+    self.cardBg.Size = Vector2_new(w - 2, h - 2)
+    self.cardBg.Color = theme.card
+    setVisible(self.cardBg, visible)
+
+    self.titleBar.Position = Vector2_new(x + 1, y + 1)
+    self.titleBar.Size = Vector2_new(w - 2, TITLE_H)
+    self.titleBar.Color = theme.bg
+    setVisible(self.titleBar, visible)
+
+    self.titleSep.Position = Vector2_new(x + 1, y + TITLE_H + 1)
+    self.titleSep.Size = Vector2_new(w - 2, 1)
+    self.titleSep.Color = theme.border
+    setVisible(self.titleSep, visible)
+
+    self.sidebarBg.Position = Vector2_new(x + 1, y + TITLE_H + 2)
+    self.sidebarBg.Size = Vector2_new(SIDEBAR_W, h - TITLE_H - 3)
+    self.sidebarBg.Color = theme.sidebar
+    setVisible(self.sidebarBg, visible)
+
+    self.sidebarSep.Position = Vector2_new(x + 1 + SIDEBAR_W, y + TITLE_H + 2)
+    self.sidebarSep.Size = Vector2_new(1, h - TITLE_H - 3)
+    self.sidebarSep.Color = theme.border
+    setVisible(self.sidebarSep, visible)
+
+    self.bodyBg.Position = Vector2_new(x + 1 + SIDEBAR_W + 1, y + TITLE_H + 2)
+    self.bodyBg.Size = Vector2_new(w - 2 - SIDEBAR_W - 1, h - TITLE_H - 3)
+    self.bodyBg.Color = theme.card
+    setVisible(self.bodyBg, visible)
+
+    self.tabBarSep.Position = Vector2_new(x + 1 + SIDEBAR_W + 1, y + TITLE_H + 2 + TAB_BAR_H)
+    self.tabBarSep.Size = Vector2_new(w - 2 - SIDEBAR_W - 1, 1)
+    self.tabBarSep.Color = theme.stroke
+    setVisible(self.tabBarSep, visible)
 
     self.titleText.Text = self.title
-    self.titleText.Size = 14
     self.titleText.Color = theme.text
-    self.titleText.Position = Vector2_new(x + 18, y + 14)
+    self.titleText.Position = Vector2_new(x + 12, y + 6)
     setVisible(self.titleText, visible)
+
+    self.versionText.Text = self.version
+    self.versionText.Color = theme.accent
+    self.versionText.Position = Vector2_new(x + 12 + #self.title * 7 + 4, y + 6)
+    setVisible(self.versionText, visible)
 end
 
-function Window:_layoutTabs()
-    local count = #self._tabs
-    if count <= 0 then return end
-
+function Window:_layoutSidebar()
+    local x, y = self.x, self.y
     local theme = self.theme
-    local pad = 16
-    local tabH = 22
-    local gap = 6
-    local x = self.x + pad
-    local y = self.y + 42
+    local count = #self._tabs
+    if count == 0 then return end
+
     local mx, my = self._mouse.x, self._mouse.y
+    local sx = x + 1
+    local sy = y + TITLE_H + 2
+    local cellH = 60
+
+    -- Vertical centering of icons inside the sidebar
+    local sidebarH = self.h - TITLE_H - 3
+    local totalH = count * cellH
+    local startY = sy + math_max(20, math_floor((sidebarH - totalH) / 2))
 
     for i, tab in ipairs(self._tabs) do
-        local label = tab.name
-        local tabW = math_max(60, #label * 8 + 16)
-        local tx = x
+        local cellY = startY + (i - 1) * cellH
+        local cx = sx + math_floor(SIDEBAR_W / 2)
+        local cy = cellY + math_floor(cellH / 2)
 
-        local hover = inside(mx, my, tx, y, tabW, tabH)
+        local hover = inside(mx, my, sx, cellY, SIDEBAR_W, cellH)
         if self.visible and self._mouse.clicked and hover then
             self._activeTab = tab
         end
 
         local active = self._activeTab == tab
-        local pillColor = active and theme.panel or theme.card
-        layoutRoundedFill(tab.pill, tx, y, tabW, tabH, 4, pillColor)
-        setRoundedFillVisible(tab.pill, self.visible)
+        local color = active and theme.accent or (hover and theme.text or theme.muted)
 
-        tab.label.Text = label
-        tab.label.Color = active and theme.text or theme.muted
-        tab.label.Size = 12
-        tab.label.Center = true
-        tab.label.Position = Vector2_new(tx + math_floor(tabW / 2), y + math_floor(tabH / 2) - 6)
-        setVisible(tab.label, self.visible)
+        tab.accentBar.Position = Vector2_new(sx, cellY + 8)
+        tab.accentBar.Size = Vector2_new(2, cellH - 16)
+        tab.accentBar.Color = theme.accent
+        setVisible(tab.accentBar, self.visible and active)
 
-        x = x + tabW + gap
+        layoutIcon(tab.icon, cx, cy, color, self.visible)
     end
 end
 
-function Window:_layoutSections()
-    local tab = self._activeTab
-    local theme = self.theme
-    local pad = 16
-    local bodyX = self.x + pad
-    local bodyY = self.y + 78
-    local bodyW = self.w - pad * 2
-    local cursorY = bodyY
-
-    for _, otherTab in ipairs(self._tabs) do
-        for _, section in ipairs(otherTab.sections) do
-            local activeSection = otherTab == tab and self.visible
-
-            local titleH = 18
-            local contentH = 10
-            for _, widget in ipairs(section.widgets) do
-                contentH = contentH + widget.h + 2
-            end
-            local sectionH = titleH + contentH + 6
-
-            if activeSection then
-                local sx = bodyX
-                local sy = cursorY
-                local sw = bodyW
-                local sh = sectionH
-
-                layoutRoundedFill(section.fillBorder, sx - 1, sy - 1, sw + 2, sh + 2, 7, theme.stroke)
-                layoutRoundedFill(section.fill, sx, sy, sw, sh, 6, theme.bg)
-                setRoundedFillVisible(section.fillBorder, true)
-                setRoundedFillVisible(section.fill, true)
-
-                section.header.Text = section.name
-                section.header.Color = theme.text
-                section.header.Size = 12
-                section.header.Position = Vector2_new(sx + 12, sy + 6)
-                setVisible(section.header, true)
-
-                local wy = sy + titleH + 6
-                for _, widget in ipairs(section.widgets) do
-                    widget.x = sx + 10
-                    widget.y = wy
-                    widget.w = sw - 20
-                    self:_layoutWidget(widget, true)
-                    wy = wy + widget.h + 2
-                end
-
-                cursorY = cursorY + sectionH + 8
-            else
-                setRoundedFillVisible(section.fillBorder, false)
-                setRoundedFillVisible(section.fill, false)
-                setVisible(section.header, false)
-                for _, widget in ipairs(section.widgets) do
-                    self:_layoutWidget(widget, false)
-                end
-            end
-        end
-    end
+local function hidePage(page)
+    setVisible(page.tabBox, false)
+    setVisible(page.tabLabel, false)
+    setVisible(page.tabUnderline, false)
 end
 
--- Per-widget visibility helper ----------------------------------------------
+local function hideSection(section)
+    setVisible(section.borderTopLeft, false)
+    setVisible(section.borderTopRight, false)
+    setVisible(section.borderBottom, false)
+    setVisible(section.borderLeft, false)
+    setVisible(section.borderRight, false)
+    setVisible(section.header, false)
+end
 
 local function hideWidget(widget)
-    if widget.fill then setRoundedFillVisible(widget.fill, false) end
-    if widget.fillBorder then setRoundedFillVisible(widget.fillBorder, false) end
-    if widget.fillBg then setRoundedFillVisible(widget.fillBg, false) end
-    if widget.fillBar then setRoundedFillVisible(widget.fillBar, false) end
-    if widget.editBox then setRoundedFillVisible(widget.editBox, false) end
-    if widget.editBorder then setRoundedBorderVisible(widget.editBorder, false) end
-    if widget.dropdown then setRoundedFillVisible(widget.dropdown, false) end
-    if widget.dropdownBorder then setRoundedFillVisible(widget.dropdownBorder, false) end
-    setVisible(widget.dotOuter, false)
-    setVisible(widget.dotInner, false)
-    setVisible(widget.swatch, false)
-    setVisible(widget.dot, false)
+    setVisible(widget.box, false)
+    setVisible(widget.boxBorder, false)
+    setVisible(widget.tick, false)
+    setVisible(widget.track, false)
+    setVisible(widget.trackBorder, false)
+    setVisible(widget.fill, false)
+    setVisible(widget.editBox, false)
+    setVisible(widget.editBorder, false)
     setVisible(widget.labelText, false)
     setVisible(widget.valueText, false)
+    setVisible(widget.bindText, false)
     setVisible(widget.arrow, false)
+    setVisible(widget.dropdown, false)
+    setVisible(widget.dropdownBorder, false)
+    setVisible(widget.swatch, false)
+    setVisible(widget.swatchBorder, false)
     if widget.optionTexts then
         for _, t in ipairs(widget.optionTexts) do setVisible(t, false) end
     end
@@ -1461,6 +1515,142 @@ local function hideWidget(widget)
         for _, b in ipairs(widget.optionHovers) do setVisible(b, false) end
     end
 end
+
+function Window:_layoutTabs()
+    local activeTab = self._activeTab
+    local theme = self.theme
+
+    -- Hide every page/section/widget by default; we'll re-enable the active ones.
+    for _, tab in ipairs(self._tabs) do
+        local isActiveTab = tab == activeTab and self.visible
+        for _, page in ipairs(tab.pages) do
+            if not isActiveTab then
+                hidePage(page)
+                for _, section in ipairs(page.sections) do
+                    hideSection(section)
+                    for _, widget in ipairs(section.widgets) do hideWidget(widget) end
+                end
+            end
+        end
+    end
+
+    if not activeTab or not self.visible then return end
+
+    local bodyX = self.x + 1 + SIDEBAR_W + 1
+    local bodyY = self.y + TITLE_H + 2
+    local bodyW = self.w - 2 - SIDEBAR_W - 1
+    local bodyH = self.h - TITLE_H - 3
+    local mx, my = self._mouse.x, self._mouse.y
+
+    local pageCount = #activeTab.pages
+    if pageCount == 0 then return end
+
+    -- Top sub-tab bar
+    local barY = bodyY
+    local cellW = math_floor(bodyW / pageCount)
+    for i, page in ipairs(activeTab.pages) do
+        local px = bodyX + (i - 1) * cellW
+        local hover = inside(mx, my, px, barY, cellW, TAB_BAR_H)
+        if self._mouse.clicked and hover then
+            activeTab._activePage = page
+        end
+        local activePage = activeTab._activePage == page
+
+        page.tabBox.Position = Vector2_new(px, barY)
+        page.tabBox.Size = Vector2_new(cellW, TAB_BAR_H)
+        page.tabBox.Color = theme.card
+        setVisible(page.tabBox, true)
+
+        page.tabLabel.Text = page.name
+        page.tabLabel.Center = true
+        page.tabLabel.Size = 13
+        page.tabLabel.Color = activePage and theme.accent or theme.muted
+        page.tabLabel.Font = activePage and FONT_BOLD or FONT
+        page.tabLabel.Position = Vector2_new(px + math_floor(cellW / 2), barY + math_floor(TAB_BAR_H / 2) - 6)
+        setVisible(page.tabLabel, true)
+
+        page.tabUnderline.Position = Vector2_new(px + 4, barY + TAB_BAR_H - 1)
+        page.tabUnderline.Size = Vector2_new(cellW - 8, 1)
+        page.tabUnderline.Color = theme.accent
+        setVisible(page.tabUnderline, activePage)
+    end
+
+    local activePage = activeTab._activePage or activeTab.pages[1]
+    if not activePage then return end
+
+    local contentX = bodyX + 8
+    local contentY = bodyY + TAB_BAR_H + 14
+    local contentW = bodyW - 16
+    local _ = bodyH
+
+    -- Sections (single column)
+    local cursorY = contentY
+    for _, section in ipairs(activePage.sections) do
+        local titleH = 18
+        local pad = 10
+        local contentH = pad
+        for _, widget in ipairs(section.widgets) do
+            contentH = contentH + widget.h + 4
+        end
+        contentH = contentH + pad - 4
+
+        local sx = contentX
+        local sy = cursorY
+        local sw = contentW
+        local sh = titleH + contentH
+
+        -- Section header centered above the box (label sits ON the top border)
+        section.header.Text = section.name
+        section.header.Color = theme.muted
+        section.header.Size = 12
+        section.header.Center = true
+        section.header.Position = Vector2_new(sx + math_floor(sw / 2), sy + 2)
+        setVisible(section.header, true)
+
+        local borderY = sy + titleH - 2
+        local headerHalf = math_floor((#section.name * 7 + 16) / 2)
+        local midX = sx + math_floor(sw / 2)
+
+        -- Top border with a gap behind the header text
+        section.borderTopLeft.From = Vector2_new(sx, borderY)
+        section.borderTopLeft.To = Vector2_new(midX - headerHalf, borderY)
+        section.borderTopLeft.Color = theme.stroke
+        setVisible(section.borderTopLeft, true)
+
+        section.borderTopRight.From = Vector2_new(midX + headerHalf, borderY)
+        section.borderTopRight.To = Vector2_new(sx + sw, borderY)
+        section.borderTopRight.Color = theme.stroke
+        setVisible(section.borderTopRight, true)
+
+        section.borderBottom.From = Vector2_new(sx, sy + sh - 1)
+        section.borderBottom.To = Vector2_new(sx + sw, sy + sh - 1)
+        section.borderBottom.Color = theme.stroke
+        setVisible(section.borderBottom, true)
+
+        section.borderLeft.From = Vector2_new(sx, borderY)
+        section.borderLeft.To = Vector2_new(sx, sy + sh - 1)
+        section.borderLeft.Color = theme.stroke
+        setVisible(section.borderLeft, true)
+
+        section.borderRight.From = Vector2_new(sx + sw - 1, borderY)
+        section.borderRight.To = Vector2_new(sx + sw - 1, sy + sh - 1)
+        section.borderRight.Color = theme.stroke
+        setVisible(section.borderRight, true)
+
+        local wy = borderY + pad
+        for _, widget in ipairs(section.widgets) do
+            widget.x = sx + 10
+            widget.y = wy
+            widget.w = sw - 20
+            self:_layoutWidget(widget, true)
+            wy = wy + widget.h + 4
+        end
+
+        cursorY = cursorY + sh + 10
+    end
+end
+
+-- Per-widget layout --------------------------------------------------------
 
 function Window:_layoutWidget(widget, visible)
     if not visible then hideWidget(widget); return end
@@ -1471,46 +1661,86 @@ function Window:_layoutWidget(widget, visible)
     local theme = self.theme
 
     if widget.kind == "toggle" then
-        if clicked then
+        local boxX = widget.x
+        local boxY = widget.y + math_floor((widget.h - 11) / 2)
+        local boxSize = 11
+        local toggleHit = inside(mx, my, boxX - 2, widget.y, 80, widget.h)
+        local bindHit = inside(mx, my, widget.x + widget.w - 70, widget.y, 70, widget.h)
+
+        if self._mouse.clicked and bindHit and not toggleHit then
+            if self._listeningBind then
+                if self._listeningBind.kind == "toggle" then self._listeningBind.listeningBind = false
+                else self._listeningBind.listening = false end
+            end
+            self._listeningBind = widget
+            widget.listeningBind = true
+        elseif self._mouse.clicked and toggleHit then
             widget.value = not widget.value
             self._values[widget.id] = widget.value
-            if widget.callback then widget.callback(widget.value, widget) end
+            if widget.callback then
+                widget.callback(widget.value, widget.bindKey, widget.bindActive, widget)
+            end
         end
-        local cx = widget.x + 7
-        local cy = widget.y + math_floor(widget.h / 2)
-        widget.dotOuter.Position = Vector2_new(cx, cy)
-        widget.dotOuter.Radius = 5
-        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
-        widget.dotInner.Position = Vector2_new(cx, cy)
-        widget.dotInner.Radius = 3
-        widget.dotInner.Color = theme.accent
-        setVisible(widget.dotOuter, true)
-        setVisible(widget.dotInner, widget.value == true)
+
+        widget.box.Position = Vector2_new(boxX, boxY)
+        widget.box.Size = Vector2_new(boxSize, boxSize)
+        widget.box.Color = theme.control
+        setVisible(widget.box, true)
+        widget.boxBorder.Position = Vector2_new(boxX, boxY)
+        widget.boxBorder.Size = Vector2_new(boxSize, boxSize)
+        widget.boxBorder.Color = widget.value and theme.accent or theme.stroke2
+        setVisible(widget.boxBorder, true)
+        widget.tick.Position = Vector2_new(boxX + 2, boxY + 2)
+        widget.tick.Size = Vector2_new(boxSize - 4, boxSize - 4)
+        widget.tick.Color = theme.accent
+        setVisible(widget.tick, widget.value == true)
+
         widget.labelText.Text = widget.label
-        widget.labelText.Size = 13
+        widget.labelText.Size = 12
         widget.labelText.Color = widget.value and theme.text or theme.muted
-        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
+        widget.labelText.Position = Vector2_new(boxX + boxSize + 8, widget.y + 2)
         setVisible(widget.labelText, true)
+
+        local bindLabel
+        if widget.listeningBind then
+            bindLabel = "[ ... ]"
+        elseif widget.bindKey then
+            bindLabel = "[ " .. keyName(widget.bindKey) .. " ]"
+        else
+            bindLabel = "[ NONE ]"
+        end
+        widget.bindText.Text = bindLabel
+        widget.bindText.Size = 11
+        widget.bindText.Color = widget.listeningBind and theme.accent2
+            or (widget.bindActive and theme.accent or theme.muted)
+        widget.bindText.Center = false
+        widget.bindText.Position = Vector2_new(widget.x + widget.w - #bindLabel * 7, widget.y + 3)
+        setVisible(widget.bindText, true)
 
     elseif widget.kind == "slider" then
         local minValue, maxValue = sliderLimits(widget)
         local rowHit = hover
-        local editingSlider = self._activeText == widget
+        local editing = self._activeText == widget
 
         if self._mouse.rightClicked and rowHit then
-            self:_beginSliderEdit(widget); editingSlider = true
-        elseif self._mouse.clicked and editingSlider and not rowHit then
-            self:_clearSliderEdit(widget); editingSlider = false
+            self:_beginSliderEdit(widget); editing = true
+        elseif self._mouse.clicked and editing and not rowHit then
+            self:_clearSliderEdit(widget); editing = false
         end
 
-        if self._mouse.clicked and not editingSlider and rowHit then
+        local trackX = widget.x
+        local trackY = widget.y + 16
+        local trackW = widget.w
+        local trackH = widget.h - 16
+
+        if self._mouse.clicked and not editing and inside(mx, my, trackX, trackY, trackW, trackH) then
             self._activeSlider = widget
         end
         if self._mouse.released and self._activeSlider == widget then
             self._activeSlider = nil
         end
         if self._activeSlider == widget and self._mouse.down then
-            local pct = clamp((mx - widget.x) / widget.w, 0, 1)
+            local pct = clamp((mx - trackX) / trackW, 0, 1)
             local raw = minValue + (maxValue - minValue) * pct
             applySliderValue(self, widget, raw)
         end
@@ -1518,113 +1748,95 @@ function Window:_layoutWidget(widget, visible)
         local value = normalizeSliderValue(widget, widget.value or minValue) or minValue
         local pct = (value - minValue) / (maxValue - minValue)
 
-        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, theme.stroke)
-        layoutRoundedFill(widget.fillBg, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
-        setRoundedFillVisible(widget.fillBorder, true)
-        setRoundedFillVisible(widget.fillBg, true)
+        widget.track.Position = Vector2_new(trackX, trackY)
+        widget.track.Size = Vector2_new(trackW, trackH)
+        widget.track.Color = theme.control2
+        setVisible(widget.track, true)
+        widget.trackBorder.Position = Vector2_new(trackX, trackY)
+        widget.trackBorder.Size = Vector2_new(trackW, trackH)
+        widget.trackBorder.Color = theme.stroke
+        setVisible(widget.trackBorder, true)
+        widget.fill.Position = Vector2_new(trackX + 1, trackY + 1)
+        widget.fill.Size = Vector2_new(math_max(1, math_floor((trackW - 2) * pct)), trackH - 2)
+        widget.fill.Color = theme.accent
+        setVisible(widget.fill, pct > 0)
 
-        local barW = math_max(8, math_floor(widget.w * pct))
-        layoutRoundedFill(widget.fillBar, widget.x, widget.y, barW, widget.h, 3, theme.accent2)
-        setRoundedFillVisible(widget.fillBar, pct > 0)
+        if editing then
+            widget.editBox.Position = Vector2_new(trackX + 2, trackY + 1)
+            widget.editBox.Size = Vector2_new(trackW - 4, trackH - 2)
+            widget.editBox.Color = theme.control2
+            setVisible(widget.editBox, true)
+            widget.editBorder.Position = Vector2_new(trackX + 2, trackY + 1)
+            widget.editBorder.Size = Vector2_new(trackW - 4, trackH - 2)
+            widget.editBorder.Color = widget.editInvalid and theme.danger or theme.accent
+            setVisible(widget.editBorder, true)
+        else
+            setVisible(widget.editBox, false)
+            setVisible(widget.editBorder, false)
+        end
 
-        if editingSlider then
-            local editW = 80
-            local editX = widget.x + widget.w - editW - 2
-            local editY = widget.y + 1
-            local editH = widget.h - 2
-            layoutRoundedFill(widget.editBox, editX, editY, editW, editH, 3, theme.control2)
-            layoutRoundedBorder(widget.editBorder, editX, editY, editW, editH, 3,
-                widget.editInvalid and theme.danger or theme.accent)
-            setRoundedFillVisible(widget.editBox, true)
-            setRoundedBorderVisible(widget.editBorder, true)
-            widget.labelText.Text = asText(widget.editText) .. "|"
-            widget.labelText.Color = widget.editInvalid and theme.danger or theme.text
-            widget.labelText.Center = true
-            widget.labelText.Position = Vector2_new(editX + math_floor(editW / 2), widget.y + 5)
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Center = false
+        if editing then
+            widget.labelText.Text = widget.label .. ": " .. asText(widget.editText) .. "|"
+            widget.labelText.Color = widget.editInvalid and theme.danger or theme.accent
         else
             widget.labelText.Text = widget.label .. ": " .. formatSliderValue(widget, value)
-            widget.labelText.Color = theme.text
-            widget.labelText.Center = true
-            widget.labelText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
         end
-        widget.labelText.Size = 12
+        widget.labelText.Position = Vector2_new(widget.x, widget.y)
         setVisible(widget.labelText, true)
 
     elseif widget.kind == "button" then
         if clicked and widget.callback then widget.callback(widget) end
-        local fillColor = hover and theme.panel2 or theme.panel
-        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, theme.stroke)
-        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, fillColor)
-        setRoundedFillVisible(widget.fillBorder, true)
-        setRoundedFillVisible(widget.fill, true)
+        widget.box.Position = Vector2_new(widget.x, widget.y)
+        widget.box.Size = Vector2_new(widget.w, widget.h)
+        widget.box.Color = hover and theme.hover or theme.panel
+        setVisible(widget.box, true)
+        widget.boxBorder.Position = Vector2_new(widget.x, widget.y)
+        widget.boxBorder.Size = Vector2_new(widget.w, widget.h)
+        widget.boxBorder.Color = theme.stroke
+        setVisible(widget.boxBorder, true)
         widget.labelText.Text = widget.label
         widget.labelText.Size = 12
-        widget.labelText.Color = theme.text
         widget.labelText.Center = true
-        widget.labelText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + math_floor(widget.h / 2) - 6)
         setVisible(widget.labelText, true)
 
     elseif widget.kind == "keybind" or widget.kind == "menu_keybind" then
         if clicked then
-            if self._listeningBind then self._listeningBind.listening = false end
-            self._listeningBind = widget
-            widget.listening = true
-        end
-        widget.labelText.Text = widget.label
-        widget.labelText.Size = 13
-        widget.labelText.Color = theme.text
-        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 2)
-        setVisible(widget.labelText, true)
-        widget.valueText.Text = widget.listening and "..." or keyName(widget.key)
-        widget.valueText.Size = 12
-        widget.valueText.Center = false
-        local rightX = widget.x + widget.w - (#asText(widget.valueText.Text) * 7)
-        widget.valueText.Color = widget.listening and theme.accent2
-            or (widget.kind == "keybind" and widget.value and theme.accent or theme.text)
-        widget.valueText.Position = Vector2_new(rightX, widget.y + 3)
-        setVisible(widget.valueText, true)
-
-    elseif widget.kind == "toggle_keybind" then
-        local toggleHit = inside(mx, my, widget.x, widget.y, widget.w * 0.6, widget.h)
-        local keyHit = inside(mx, my, widget.x + widget.w * 0.6, widget.y, widget.w * 0.4, widget.h)
-        if self._mouse.clicked and toggleHit then
-            widget.value = not widget.value
-            self._values[widget.id] = widget.value
-            if widget.callback then
-                widget.callback(widget.value, widget.key, widget.bindActive, widget)
+            if self._listeningBind then
+                if self._listeningBind.kind == "toggle" then self._listeningBind.listeningBind = false
+                else self._listeningBind.listening = false end
             end
-        end
-        if self._mouse.clicked and keyHit then
-            if self._listeningBind then self._listeningBind.listening = false end
             self._listeningBind = widget
             widget.listening = true
         end
-        local cx = widget.x + 7
-        local cy = widget.y + math_floor(widget.h / 2)
-        widget.dotOuter.Position = Vector2_new(cx, cy); widget.dotOuter.Radius = 5
-        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
-        widget.dotInner.Position = Vector2_new(cx, cy); widget.dotInner.Radius = 3
-        widget.dotInner.Color = theme.accent
-        setVisible(widget.dotOuter, true)
-        setVisible(widget.dotInner, widget.value == true)
         widget.labelText.Text = widget.label
-        widget.labelText.Size = 13
-        widget.labelText.Color = widget.value and theme.text or theme.muted
-        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x, widget.y + 3)
         setVisible(widget.labelText, true)
-        widget.valueText.Text = widget.listening and "..." or keyName(widget.key)
-        widget.valueText.Size = 12
-        widget.valueText.Center = false
-        local txt = asText(widget.valueText.Text)
+        local txt
+        if widget.listening then txt = "[ ... ]"
+        else txt = "[ " .. keyName(widget.key) .. " ]" end
+        widget.valueText.Text = txt
+        widget.valueText.Size = 11
         widget.valueText.Color = widget.listening and theme.accent2
-            or (widget.bindActive and theme.accent or theme.text)
+            or (widget.kind == "keybind" and widget.value and theme.accent or theme.muted)
         widget.valueText.Position = Vector2_new(widget.x + widget.w - #txt * 7, widget.y + 3)
         setVisible(widget.valueText, true)
 
     elseif widget.kind == "input_text" then
+        local boxX = widget.x
+        local boxY = widget.y + 16
+        local boxW = widget.w
+        local boxH = widget.h - 16
         local activeText = self._activeText == widget
+
         if self._mouse.clicked then
-            if hover then
+            if inside(mx, my, boxX, boxY, boxW, boxH) then
                 self._activeText = widget
                 self._textLastKeys = {}
             elseif activeText then
@@ -1632,31 +1844,41 @@ function Window:_layoutWidget(widget, visible)
                 self._textLastKeys = {}
             end
         end
-        local borderColor = activeText and theme.accent or theme.stroke
-        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, borderColor)
-        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
-        setRoundedFillVisible(widget.fillBorder, true)
-        setRoundedFillVisible(widget.fill, true)
+
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x, widget.y)
+        setVisible(widget.labelText, true)
+
+        widget.box.Position = Vector2_new(boxX, boxY)
+        widget.box.Size = Vector2_new(boxW, boxH)
+        widget.box.Color = theme.control
+        setVisible(widget.box, true)
+        widget.boxBorder.Position = Vector2_new(boxX, boxY)
+        widget.boxBorder.Size = Vector2_new(boxW, boxH)
+        widget.boxBorder.Color = activeText and theme.accent or theme.stroke
+        setVisible(widget.boxBorder, true)
+
         local display = asText(widget.value)
         if activeText then display = display .. "|" end
-        if display == "" then
-            display = widget.label
-            widget.valueText.Color = theme.muted
-        else
-            widget.valueText.Color = theme.text
-        end
         widget.valueText.Text = display
         widget.valueText.Size = 12
-        widget.valueText.Center = true
-        widget.valueText.Position = Vector2_new(widget.x + math_floor(widget.w / 2), widget.y + 5)
+        widget.valueText.Center = false
+        widget.valueText.Color = theme.text
+        widget.valueText.Position = Vector2_new(boxX + 6, boxY + 1)
         setVisible(widget.valueText, true)
 
     elseif widget.kind == "combo" then
-        local maxRows = math_min(#widget.items, #widget.optionTexts)
+        local boxX = widget.x
+        local boxY = widget.y + 16
+        local boxW = widget.w
+        local boxH = widget.h - 16
         local rowH = 18
+        local maxRows = math_min(#widget.items, #widget.optionTexts)
 
         if self._mouse.clicked then
-            if hover then
+            if inside(mx, my, boxX, boxY, boxW, boxH) then
                 if self._activeCombo and self._activeCombo ~= widget then
                     self._activeCombo.open = false
                 end
@@ -1665,8 +1887,8 @@ function Window:_layoutWidget(widget, visible)
             elseif widget.open then
                 local picked = false
                 for i = 1, maxRows do
-                    local oy = widget.y + widget.h + 2 + (i - 1) * rowH
-                    if inside(mx, my, widget.x, oy, widget.w, rowH) then
+                    local oy = boxY + boxH + (i - 1) * rowH
+                    if inside(mx, my, boxX, oy, boxW, rowH) then
                         widget:SetValue(i - 1)
                         picked = true
                         break
@@ -1674,27 +1896,36 @@ function Window:_layoutWidget(widget, visible)
                 end
                 widget.open = false
                 self._activeCombo = nil
-                if not picked and not inside(mx, my, widget.x, widget.y, widget.w, widget.h + 2 + maxRows * rowH) then
+                if not picked and not inside(mx, my, boxX, boxY, boxW, boxH + maxRows * rowH) then
                     widget.open = false
                 end
             end
         end
 
-        local borderColor = widget.open and theme.accent or theme.stroke
-        layoutRoundedFill(widget.fillBorder, widget.x - 1, widget.y - 1, widget.w + 2, widget.h + 2, 4, borderColor)
-        layoutRoundedFill(widget.fill, widget.x, widget.y, widget.w, widget.h, 3, theme.panel)
-        setRoundedFillVisible(widget.fillBorder, true)
-        setRoundedFillVisible(widget.fill, true)
+        widget.labelText.Text = widget.label
+        widget.labelText.Size = 12
+        widget.labelText.Color = theme.text
+        widget.labelText.Position = Vector2_new(widget.x, widget.y)
+        setVisible(widget.labelText, true)
+
+        widget.box.Position = Vector2_new(boxX, boxY)
+        widget.box.Size = Vector2_new(boxW, boxH)
+        widget.box.Color = theme.control
+        setVisible(widget.box, true)
+        widget.boxBorder.Position = Vector2_new(boxX, boxY)
+        widget.boxBorder.Size = Vector2_new(boxW, boxH)
+        widget.boxBorder.Color = widget.open and theme.accent or theme.stroke
+        setVisible(widget.boxBorder, true)
 
         widget.valueText.Text = widget:GetText()
         widget.valueText.Size = 12
-        widget.valueText.Color = theme.text
         widget.valueText.Center = false
-        widget.valueText.Position = Vector2_new(widget.x + 8, widget.y + 5)
+        widget.valueText.Color = theme.text
+        widget.valueText.Position = Vector2_new(boxX + 6, boxY + 1)
         setVisible(widget.valueText, true)
 
-        local arrowX = widget.x + widget.w - 12
-        local arrowY = widget.y + math_floor(widget.h / 2)
+        local arrowX = boxX + boxW - 10
+        local arrowY = boxY + math_floor(boxH / 2)
         if widget.open then
             widget.arrow.PointA = Vector2_new(arrowX - 4, arrowY + 2)
             widget.arrow.PointB = Vector2_new(arrowX + 4, arrowY + 2)
@@ -1708,28 +1939,31 @@ function Window:_layoutWidget(widget, visible)
         setVisible(widget.arrow, true)
 
         if widget.open and maxRows > 0 then
-            local dx = widget.x
-            local dy = widget.y + widget.h + 2
+            local dy = boxY + boxH
             local dh = maxRows * rowH
-            layoutRoundedFill(widget.dropdownBorder, dx - 1, dy - 1, widget.w + 2, dh + 2, 4, theme.stroke)
-            layoutRoundedFill(widget.dropdown, dx, dy, widget.w, dh, 3, theme.panel)
-            setRoundedFillVisible(widget.dropdownBorder, true)
-            setRoundedFillVisible(widget.dropdown, true)
+            widget.dropdown.Position = Vector2_new(boxX, dy)
+            widget.dropdown.Size = Vector2_new(boxW, dh)
+            widget.dropdown.Color = theme.control
+            setVisible(widget.dropdown, true)
+            widget.dropdownBorder.Position = Vector2_new(boxX, dy)
+            widget.dropdownBorder.Size = Vector2_new(boxW, dh)
+            widget.dropdownBorder.Color = theme.accent
+            setVisible(widget.dropdownBorder, true)
             for i = 1, #widget.optionTexts do
                 local box = widget.optionHovers[i]
                 local txt = widget.optionTexts[i]
                 if i <= maxRows then
                     local oy = dy + (i - 1) * rowH
-                    local rowHover = inside(mx, my, dx, oy, widget.w, rowH)
-                    box.Position = Vector2_new(dx, oy)
-                    box.Size = Vector2_new(widget.w, rowH)
+                    local rowHover = inside(mx, my, boxX, oy, boxW, rowH)
+                    box.Position = Vector2_new(boxX + 1, oy)
+                    box.Size = Vector2_new(boxW - 2, rowH)
                     box.Color = theme.hover
                     setVisible(box, rowHover)
                     txt.Text = asText(widget.items[i])
                     txt.Size = 12
                     txt.Center = false
                     txt.Color = (widget.value == i - 1) and theme.accent or theme.text
-                    txt.Position = Vector2_new(dx + 8, oy + 3)
+                    txt.Position = Vector2_new(boxX + 6, oy + 2)
                     setVisible(txt, true)
                 else
                     setVisible(box, false)
@@ -1737,8 +1971,8 @@ function Window:_layoutWidget(widget, visible)
                 end
             end
         else
-            setRoundedFillVisible(widget.dropdownBorder, false)
-            setRoundedFillVisible(widget.dropdown, false)
+            setVisible(widget.dropdown, false)
+            setVisible(widget.dropdownBorder, false)
             for i = 1, #widget.optionTexts do
                 setVisible(widget.optionHovers[i], false)
                 setVisible(widget.optionTexts[i], false)
@@ -1754,62 +1988,35 @@ function Window:_layoutWidget(widget, visible)
             if widget.callback then widget.callback(widget.value, widget) end
         end
         widget.labelText.Text = widget.label
-        widget.labelText.Size = 13
+        widget.labelText.Size = 12
         widget.labelText.Color = theme.text
-        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 2)
+        widget.labelText.Position = Vector2_new(widget.x, widget.y + 3)
         setVisible(widget.labelText, true)
-        local cx = widget.x + widget.w - 8
-        local cy = widget.y + math_floor(widget.h / 2)
-        widget.dot.Position = Vector2_new(cx, cy)
-        widget.dot.Radius = 5
-        widget.dot.Color = isColor(widget.value) and widget.value or theme.white
-        setVisible(widget.dot, true)
-
-    elseif widget.kind == "toggle_color" then
-        local toggleHit = inside(mx, my, widget.x, widget.y, widget.w - 20, widget.h)
-        local swatchHit = inside(mx, my, widget.x + widget.w - 18, widget.y, 18, widget.h)
-        if self._mouse.clicked and toggleHit then
-            widget.value = not widget.value
-            self._values[widget.id] = widget.value
-            if widget.callback then widget.callback(widget.value, widget.color, widget) end
-        end
-        if self._mouse.clicked and swatchHit then
-            widget.paletteIndex = widget.paletteIndex + 1
-            if widget.paletteIndex > #COLOR_PALETTE then widget.paletteIndex = 1 end
-            widget.color = COLOR_PALETTE[widget.paletteIndex]
-            if widget.callback then widget.callback(widget.value, widget.color, widget) end
-        end
-        local cx = widget.x + 7
-        local cy = widget.y + math_floor(widget.h / 2)
-        widget.dotOuter.Position = Vector2_new(cx, cy); widget.dotOuter.Radius = 5
-        widget.dotOuter.Color = widget.value and theme.accent or theme.muted
-        widget.dotInner.Position = Vector2_new(cx, cy); widget.dotInner.Radius = 3
-        widget.dotInner.Color = theme.accent
-        setVisible(widget.dotOuter, true)
-        setVisible(widget.dotInner, widget.value == true)
-        widget.labelText.Text = widget.label
-        widget.labelText.Size = 13
-        widget.labelText.Color = widget.value and theme.text or theme.muted
-        widget.labelText.Position = Vector2_new(widget.x + 18, widget.y + 2)
-        setVisible(widget.labelText, true)
-        local sx = widget.x + widget.w - 8
-        widget.swatch.Position = Vector2_new(sx, cy)
-        widget.swatch.Radius = 5
-        widget.swatch.Color = isColor(widget.color) and widget.color or theme.white
+        local sw = 18
+        local sh = 10
+        local sx = widget.x + widget.w - sw
+        local sy = widget.y + math_floor((widget.h - sh) / 2)
+        widget.swatch.Position = Vector2_new(sx, sy)
+        widget.swatch.Size = Vector2_new(sw, sh)
+        widget.swatch.Color = isColor(widget.value) and widget.value or theme.white
         setVisible(widget.swatch, true)
+        widget.swatchBorder.Position = Vector2_new(sx, sy)
+        widget.swatchBorder.Size = Vector2_new(sw, sh)
+        widget.swatchBorder.Color = hover and theme.accent or theme.stroke
+        setVisible(widget.swatchBorder, true)
 
     elseif widget.kind == "text" then
         widget.labelText.Text = widget.label
         widget.labelText.Size = 12
-        widget.labelText.Color = theme.text
-        widget.labelText.Position = Vector2_new(widget.x + 2, widget.y + 1)
+        widget.labelText.Color = theme.muted
+        widget.labelText.Position = Vector2_new(widget.x, widget.y)
         setVisible(widget.labelText, true)
     end
 end
 
 function Window:_handleDrag()
     local mx, my = self._mouse.x, self._mouse.y
-    local headerHit = inside(mx, my, self.x, self.y, self.w, 36)
+    local headerHit = inside(mx, my, self.x, self.y, self.w, TITLE_H)
     if self.visible and self._mouse.clicked and headerHit then
         self._dragging = true
         self._dragOffsetX = mx - self.x
@@ -1828,8 +2035,8 @@ function Window:Step(_dt)
     self:_handleHotkeys()
     self:_handleDrag()
     self:_layoutShell()
+    self:_layoutSidebar()
     self:_layoutTabs()
-    self:_layoutSections()
     self:_applyVisibility()
 end
 
@@ -1841,24 +2048,63 @@ function Window:Pulse(seconds)
     end
 end
 
--- Demo -----------------------------------------------------------------------
+-- Demo ----------------------------------------------------------------------
 
 function VenusGUI:Demo(opts)
     opts = opts or {}
 
     local gui = VenusGUI.Create({
-        Title = opts.Title or "Venus Library",
-        Width = opts.Width or 380,
-        Height = opts.Height or 560,
+        Title = opts.Title or "universal",
+        Version = opts.Version or "v1",
+        Width = opts.Width or 720,
+        Height = opts.Height or 460,
         ToggleKey = opts.ToggleKey or 0x70,
         ConfigFolder = opts.ConfigFolder,
     })
 
-    local aimbot = gui:Tab("Aimbot")
-    local visuals = gui:Tab("Visuals")
-    local misc = gui:Tab("Misc")
-    local settings = gui:Tab("Settings")
+    local aimbot   = gui:Tab("Aimbot",   "crosshair")
+    local trigger  = gui:Tab("Trigger",  "circle")
+    local visuals  = gui:Tab("Visuals",  "eye")
+    local misc     = gui:Tab("Misc",     "menu")
+    local configs  = gui:Tab("Configs",  "folder")
 
+    -- Aimbot: matches the screenshot (aimbot/antiaim sub-tabs, "main" section)
+    local aimMain = aimbot:Page("aimbot")
+    local aimAntiAim = aimbot:Page("antiaim")
+
+    local aimMainSec = aimMain:Section("main")
+    aimMainSec:Toggle("aim_enabled", "enabled", false, nil)
+    aimMainSec:Combo("aim_origin", "origin", { "camera", "head", "chest" }, 0)
+    aimMainSec:Combo("aim_hitbox", "hitbox", { "head", "chest", "closest" }, 0)
+    aimMainSec:Toggle("aim_autofire", "automatic fire", false, nil)
+
+    local aaMain = aimAntiAim:Section("anti aim")
+    aaMain:Toggle("aa_enabled", "enabled", false)
+    aaMain:SliderInt("aa_yaw", "yaw offset", -180, 180, 0)
+    aaMain:Combo("aa_mode", "mode", { "static", "jitter", "spin" }, 0)
+
+    -- Trigger
+    local triggerMain = trigger:Page("triggerbot"):Section("main")
+    triggerMain:Toggle("trigger_enabled", "enabled", false, nil, { Keybind = 0x46, KeybindMode = "hold" })
+    triggerMain:SliderInt("trigger_delay", "delay", 0, 1000, 125)
+    triggerMain:SliderFloat("trigger_chance", "hit chance", 0, 100, 75, "%.1f")
+
+    -- Visuals
+    local espPage = visuals:Page("esp"):Section("main")
+    espPage:Toggle("esp_enabled", "enabled", true)
+    espPage:Toggle("esp_boxes", "boxes", true)
+    espPage:Toggle("esp_names", "names", true)
+    espPage:SliderInt("esp_distance", "max distance", 100, 10000, 2500)
+    espPage:ColorPicker("esp_color", "esp color", 95, 110, 255)
+
+    -- Misc
+    local moveSec = misc:Page("movement"):Section("main")
+    moveSec:Toggle("bhop", "bunny hop", false)
+    moveSec:SliderInt("walk", "walk speed", 16, 250, 16)
+    moveSec:Keybind("move_key", "movement key", 0x47, "toggle")
+
+    -- Configs tab: full save/load workflow, same as MatchaGUI
+    local configsPage = configs:Page("configs")
     local configStatus
     local configDropdown
 
@@ -1871,9 +2117,11 @@ function VenusGUI:Demo(opts)
     local function selectedConfigName()
         if configDropdown then
             local selected = asText(configDropdown:GetText())
-            if selected and selected ~= "" then return selected end
+            if selected ~= "" then return selected end
         end
-        return asText(gui:GetValue("config_name") or "default")
+        local name = asText(gui:GetValue("config_name"))
+        if name == "" then name = "default" end
+        return name
     end
 
     local function selectConfig(name)
@@ -1884,87 +2132,52 @@ function VenusGUI:Demo(opts)
     end
 
     local function refreshStatus()
-        local configs = gui:ListConfigs()
-        if configDropdown then configDropdown:SetItems(configs) end
-        if #configs == 0 then setStatus("No configs saved")
-        else setStatus("Selected: " .. selectedConfigName()) end
+        local list = gui:ListConfigs()
+        if configDropdown then configDropdown:SetItems(list) end
+        if #list == 0 then setStatus("no configs saved")
+        else setStatus("selected: " .. selectedConfigName()) end
     end
 
-    -- Aimbot tab matches the screenshot
-    local section = aimbot:Section("Section")
-    section:Text("Label")
-    section:Button("Button", function() setStatus("Button pressed") end)
-    section:Toggle("aim_toggle", "Toggle", false)
-    section:Box("aim_box", "Box", "")
-    section:SliderInt("aim_slider", "Slider", 0, 100, 20)
-    section:Combo("aim_dropdown", "", { "Option1", "Option2", "Option3" }, 0)
-    section:Keybind("aim_keybind", "Keybind", 0x41, "toggle")
-    section:ToggleKeybind("aim_toggle_keybind", "Toggle Keybind", false, 0x41, "toggle")
-    section:ColorPicker("aim_color", "Color Picker", 255, 0, 255)
-    section:ToggleColorPicker("aim_color_toggle", "Color Picker Toggle", false, 220, 70, 70)
-
-    -- Visuals tab
-    local esp = visuals:Section("ESP")
-    esp:Toggle("esp_enabled", "Enabled", true)
-    esp:Toggle("esp_boxes", "Boxes", true)
-    esp:Toggle("esp_names", "Names", true)
-    esp:SliderInt("esp_distance", "Max Distance", 100, 10000, 2500)
-    esp:ColorPicker("esp_color", "ESP Color", 201, 148, 160)
-
-    -- Misc tab
-    local movement = misc:Section("Movement")
-    movement:Toggle("bhop", "Bunny Hop", false)
-    movement:SliderInt("walk", "Walk Speed", 16, 250, 16)
-    movement:Keybind("move_key", "Movement Key", 0x47, "toggle")
-
-    -- Settings tab: full config system, same workflow as MatchaGUI
-    local createConfigs = settings:Section("Create Configs")
-    createConfigs:InputText("config_name", "Name", "", nil, { skipConfig = true })
-    createConfigs:Button("Create", function()
+    local createSec = configsPage:Section("create")
+    createSec:InputText("config_name", "name", "", nil, { skipConfig = true })
+    createSec:Button("create", function()
         local name = asText(gui:GetValue("config_name"))
         if name == "" then name = "default" end
         local ok, msg = gui:SaveConfig(name)
-        if ok then
-            setStatus("Saved: " .. msg); refreshStatus(); selectConfig(name)
-        else
-            setStatus("Save failed: " .. tostring(msg))
-        end
+        if ok then setStatus("saved: " .. msg); refreshStatus(); selectConfig(name)
+        else setStatus("save failed: " .. tostring(msg)) end
     end)
 
-    local configSettings = settings:Section("Config Settings")
-    configDropdown = configSettings:Combo("selected_config", "Saved Configs", {}, 0, function(_, text)
+    local manageSec = configsPage:Section("manage")
+    configDropdown = manageSec:Combo("selected_config", "saved configs", {}, 0, function(_, text)
         text = asText(text)
         if text ~= "" then
             gui:SetValue("config_name", text)
-            setStatus("Selected: " .. text)
+            setStatus("selected: " .. text)
         end
     end, { skipConfig = true })
-    configStatus = configSettings:Text("No configs saved")
-    configSettings:Button("Load", function()
+    configStatus = manageSec:Text("no configs saved")
+    manageSec:Button("load", function()
         local name = selectedConfigName()
         local ok, msg = gui:LoadConfig(name)
-        setStatus(ok and ("Loaded: " .. name) or ("Load failed: " .. tostring(msg)))
+        setStatus(ok and ("loaded: " .. name) or ("load failed: " .. tostring(msg)))
     end)
-    configSettings:Button("Update", function()
+    manageSec:Button("update", function()
         local name = selectedConfigName()
         local ok, msg = gui:SaveConfig(name)
-        if ok then
-            setStatus("Updated: " .. msg); refreshStatus(); selectConfig(name)
-        else
-            setStatus("Update failed: " .. tostring(msg))
-        end
+        if ok then setStatus("updated: " .. msg); refreshStatus(); selectConfig(name)
+        else setStatus("update failed: " .. tostring(msg)) end
     end)
-    configSettings:Button("Delete", function()
+    manageSec:Button("delete", function()
         local name = selectedConfigName()
         local ok, msg = gui:DeleteConfig(name)
-        if ok then setStatus("Deleted: " .. msg); refreshStatus()
-        else setStatus("Delete failed: " .. tostring(msg)) end
+        if ok then setStatus("deleted: " .. msg); refreshStatus()
+        else setStatus("delete failed: " .. tostring(msg)) end
     end)
-    configSettings:Button("Refresh", refreshStatus)
+    manageSec:Button("refresh", refreshStatus)
 
-    local other = settings:Section("Other")
-    other:Toggle("show_keybinds", "Show Keybinds", false)
-    other:MenuKeybind("menu_key", "Menu Key", 0x70)
+    local settingsSec = configsPage:Section("settings")
+    settingsSec:MenuKeybind("menu_key", "menu key", 0x70)
 
     gui:SetTab(opts.Tab or "Aimbot")
     refreshStatus()
@@ -1985,8 +2198,12 @@ VenusGUI.Theme = DEFAULT_THEME
 venus = VenusGUI
 Venus = VenusGUI
 VenusUI = VenusGUI
+universal = VenusGUI
+Universal = VenusGUI
 _G.venus = VenusGUI
 _G.Venus = VenusGUI
 _G.VenusUI = VenusGUI
+_G.universal = VenusGUI
+_G.Universal = VenusGUI
 
 return VenusGUI
