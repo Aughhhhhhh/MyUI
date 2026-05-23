@@ -1,5 +1,6 @@
 -- MatchaGUI
 -- First-party Drawing-based GUI foundation for Matcha LuaVM scripts.
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/Aughhhhhhh/MyUI/refs/heads/main/UI.lua"))()
 
 local MatchaGUI = {}
 
@@ -29,6 +30,12 @@ local KEY_NAMES = {
     [0x20] = "Space",
     [0x2D] = "Insert",
     [0x2E] = "Delete",
+    [0x6B] = "Num+",
+    [0x6D] = "Num-",
+    [0x6E] = "Num.",
+    [0xBB] = "+",
+    [0xBD] = "-",
+    [0xBE] = ".",
     [0x70] = "F1",
     [0x71] = "F2",
     [0x72] = "F3",
@@ -51,11 +58,17 @@ for i = 0x30, 0x39 do
     KEY_NAMES[i] = string.char(i)
 end
 
+for i = 0x60, 0x69 do
+    KEY_NAMES[i] = "Num" .. tostring(i - 0x60)
+end
+
 local KEY_SCAN = {
     0x08, 0x09, 0x0D, 0x10, 0x11, 0x12, 0x14, 0x1B, 0x20, 0x2D, 0x2E,
     0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
     0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D,
     0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A,
+    0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6B, 0x6D, 0x6E,
+    0xBB, 0xBD, 0xBE,
     0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
 }
 
@@ -149,8 +162,39 @@ local function charFromKey(vk)
     if vk >= 0x30 and vk <= 0x39 then
         return string.char(vk)
     end
+    if vk >= 0x60 and vk <= 0x69 then
+        return tostring(vk - 0x60)
+    end
+    if vk == 0x6E or vk == 0xBE then
+        return "."
+    end
+    if vk == 0x6D or vk == 0xBD then
+        return "-"
+    end
+    if vk == 0x6B or vk == 0xBB then
+        return "+"
+    end
     if vk == 0x20 then
         return " "
+    end
+    return nil
+end
+
+local function numericCharFromKey(vk)
+    if vk >= 0x30 and vk <= 0x39 then
+        return string.char(vk)
+    end
+    if vk >= 0x60 and vk <= 0x69 then
+        return tostring(vk - 0x60)
+    end
+    if vk == 0x6E or vk == 0xBE then
+        return "."
+    end
+    if vk == 0x6D or vk == 0xBD then
+        return "-"
+    end
+    if vk == 0x6B or vk == 0xBB then
+        return "+"
     end
     return nil
 end
@@ -158,6 +202,12 @@ end
 local function readMouseDown()
     if not ismouse1pressed then return false end
     local ok, down = pcall(ismouse1pressed)
+    return ok and down == true
+end
+
+local function readMouse2Down()
+    if not ismouse2pressed then return false end
+    local ok, down = pcall(ismouse2pressed)
     return ok and down == true
 end
 
@@ -200,6 +250,56 @@ end
 local function asNumber(value, fallback)
     if type(value) == "number" then return value end
     return fallback
+end
+
+local function sliderLimits(widget)
+    local minValue = asNumber(widget.min, 0)
+    local maxValue = asNumber(widget.max, minValue + 1)
+    if maxValue <= minValue then maxValue = minValue + 1 end
+    return minValue, maxValue
+end
+
+local function normalizeSliderValue(widget, value)
+    value = tonumber(value)
+    if not value then return nil end
+
+    local minValue, maxValue = sliderLimits(widget)
+    local nextValue = clamp(value, minValue, maxValue)
+    local step = widget.step or 1
+
+    if step > 0 then
+        nextValue = math_floor((nextValue / step) + 1 / 2) * step
+    end
+
+    nextValue = clamp(nextValue, minValue, maxValue)
+    if widget.format == "%d" then
+        nextValue = math_floor(nextValue + 1 / 2)
+    end
+
+    return nextValue
+end
+
+local function formatSliderValue(widget, value)
+    local ok, text = pcall(string_format, widget.format or "%.2f", value)
+    if ok then return text end
+    return tostring(value)
+end
+
+local function applySliderValue(window, widget, value)
+    local nextValue = normalizeSliderValue(widget, value)
+    if nextValue == nil then return false end
+
+    if nextValue ~= widget.value then
+        widget.value = nextValue
+        window._values[widget.id] = nextValue
+        if widget.callback then
+            widget.callback(nextValue, widget)
+        end
+    else
+        window._values[widget.id] = nextValue
+    end
+
+    return true, nextValue
 end
 
 local function normalizeItems(items)
@@ -400,7 +500,18 @@ function MatchaGUI.Create(opts)
     self._values = {}
     self._widgetsById = {}
     self._activeTab = nil
-    self._mouse = { x = 0, y = 0, px = 0, py = 0, down = false, clicked = false, released = false }
+    self._mouse = {
+        x = 0,
+        y = 0,
+        px = 0,
+        py = 0,
+        down = false,
+        clicked = false,
+        released = false,
+        rightDown = false,
+        rightClicked = false,
+        rightReleased = false,
+    }
     self._dragging = false
     self._dragOffsetX = 0
     self._dragOffsetY = 0
@@ -521,6 +632,10 @@ function Section:_addWidget(kind, id, label, opts)
         widget.track = makeBox(win, win.theme.stroke, 53)
         widget.fill = makeBox(win, win.theme.accent, 54)
         widget.knob = makeBox(win, win.theme.text, 55)
+        widget.editBox = makeBox(win, win.theme.control2, 56)
+        widget.editBorder = makeLineBox(win, win.theme.accent, 57)
+        widget.editBox.Visible = false
+        widget.editBorder.Visible = false
     elseif kind == "button" then
         widget.border = makeLineBox(win, win.theme.stroke, 54)
         widget.labelText.Center = true
@@ -971,11 +1086,14 @@ function Window:_readMouse()
 
     local active = robloxActive()
     local down = false
+    local rightDown = false
     if active then
         down = readMouseDown()
+        rightDown = readMouse2Down()
     end
 
     local wasDown = self._mouse.down
+    local wasRightDown = self._mouse.rightDown
     self._mouse.px = self._mouse.x
     self._mouse.py = self._mouse.y
     self._mouse.x = mx
@@ -983,6 +1101,42 @@ function Window:_readMouse()
     self._mouse.down = down
     self._mouse.clicked = down and not wasDown
     self._mouse.released = (not down) and wasDown
+    self._mouse.rightDown = rightDown
+    self._mouse.rightClicked = rightDown and not wasRightDown
+    self._mouse.rightReleased = (not rightDown) and wasRightDown
+end
+
+function Window:_beginSliderEdit(widget)
+    if not widget or widget.kind ~= "slider" then return end
+
+    local minValue = sliderLimits(widget)
+    local value = normalizeSliderValue(widget, widget.value or minValue) or minValue
+
+    if self._activeCombo then
+        self._activeCombo.open = false
+        self._activeCombo = nil
+    end
+    if self._listeningBind then
+        self._listeningBind.listening = false
+        self._listeningBind = nil
+    end
+
+    self._activeSlider = nil
+    self._activeText = widget
+    self._textLastKeys = {}
+    widget.editText = formatSliderValue(widget, value)
+    widget.editInvalid = false
+end
+
+function Window:_clearSliderEdit(widget)
+    if widget and widget.kind == "slider" then
+        widget.editText = nil
+        widget.editInvalid = false
+    end
+    if self._activeText == widget then
+        self._activeText = nil
+    end
+    self._textLastKeys = {}
 end
 
 function Window:_handleHotkeys()
@@ -1000,6 +1154,64 @@ function Window:_handleHotkeys()
 
     if self._activeText then
         local widget = self._activeText
+
+        if widget.kind == "slider" then
+            local changed = false
+            local value = asText(widget.editText)
+
+            for _, vk in ipairs(KEY_SCAN) do
+                local keyDown = readKey(vk)
+                local wasDown = self._textLastKeys[vk] == true
+                if keyDown and not wasDown then
+                    if vk == 0x0D then
+                        local ok = applySliderValue(self, widget, tonumber(value))
+                        if ok then
+                            self:_clearSliderEdit(widget)
+                            break
+                        end
+                        widget.editInvalid = true
+                    elseif vk == 0x1B then
+                        self:_clearSliderEdit(widget)
+                        break
+                    elseif vk == 0x08 then
+                        if #value > 0 then
+                            value = string.sub(value, 1, #value - 1)
+                            changed = true
+                        end
+                    elseif vk == 0x2E then
+                        value = ""
+                        changed = true
+                    else
+                        local ch = numericCharFromKey(vk)
+                        if ch and #value < 18 then
+                            if ch == "." then
+                                if not string.find(value, ".", 1, true) then
+                                    value = value .. ch
+                                    changed = true
+                                end
+                            elseif ch == "-" or ch == "+" then
+                                if #value == 0 then
+                                    value = value .. ch
+                                    changed = true
+                                end
+                            else
+                                value = value .. ch
+                                changed = true
+                            end
+                        end
+                    end
+                end
+                self._textLastKeys[vk] = keyDown
+            end
+
+            if changed then
+                widget.editText = value
+                widget.editInvalid = false
+            end
+            releaseTextBlockKeys()
+            return
+        end
+
         local changed = false
         local value = asText(widget.value)
 
@@ -1246,6 +1458,8 @@ function Window:_setWidgetVisible(widget, visible)
     setVisible(widget.knob, visible)
     setVisible(widget.valueText, visible)
     setVisible(widget.fill, visible)
+    setVisible(widget.editBox, false)
+    setVisible(widget.editBorder, false)
     setVisible(widget.keyBox, visible)
     setVisible(widget.keyBorder, visible)
     setVisible(widget.inputBox, visible)
@@ -1305,16 +1519,24 @@ function Window:_layoutWidget(widget, visible)
         widget.knob.Size = Vector2_new(8, 8)
         widget.knob.Color = widget.value and theme.accent or theme.control
     elseif widget.kind == "slider" then
-        local minValue = widget.min or 0
-        local maxValue = widget.max or 100
-        if maxValue <= minValue then maxValue = minValue + 1 end
+        local minValue, maxValue = sliderLimits(widget)
 
         local trackX = widget.x + 4
         local trackY = widget.y + 24
         local trackW = widget.w - 8
         local trackH = 9
+        local rowHit = inside(mx, my, widget.x, widget.y, widget.w, widget.h)
+        local editingSlider = self._activeText == widget
 
-        if self._mouse.clicked and inside(mx, my, trackX, trackY - 6, trackW, 18) then
+        if self._mouse.rightClicked and rowHit then
+            self:_beginSliderEdit(widget)
+            editingSlider = true
+        elseif self._mouse.clicked and editingSlider and not rowHit then
+            self:_clearSliderEdit(widget)
+            editingSlider = false
+        end
+
+        if self._mouse.clicked and not editingSlider and inside(mx, my, trackX, trackY - 6, trackW, 18) then
             self._activeSlider = widget
         end
         if self._mouse.released and self._activeSlider == widget then
@@ -1323,36 +1545,41 @@ function Window:_layoutWidget(widget, visible)
         if self._activeSlider == widget and self._mouse.down then
             local pct = clamp((mx - trackX) / trackW, 0, 1)
             local raw = minValue + (maxValue - minValue) * pct
-            local step = widget.step or 1
-            local nextValue = raw
-            if step > 0 then
-                nextValue = math_floor((raw / step) + 1 / 2) * step
-            end
-            nextValue = clamp(nextValue, minValue, maxValue)
-            if widget.format == "%d" then
-                nextValue = math_floor(nextValue + 1 / 2)
-            end
-            if nextValue ~= widget.value then
-                widget.value = nextValue
-                self._values[widget.id] = nextValue
-                if widget.callback then
-                    widget.callback(nextValue, widget)
-                end
-            end
+            applySliderValue(self, widget, raw)
         end
 
-        local value = clamp(widget.value or minValue, minValue, maxValue)
+        local value = normalizeSliderValue(widget, widget.value or minValue) or minValue
         local pct = (value - minValue) / (maxValue - minValue)
         local fillW = math_floor(trackW * pct)
+        local editW = 72
+        local editX = widget.x + widget.w - editW - 4
+        local displayValue = formatSliderValue(widget, value)
 
         widget.labelText.Text = widget.label
         widget.labelText.Size = 13
         widget.labelText.Position = Vector2_new(widget.x + 4, widget.y + 3)
         widget.labelText.Color = theme.text
-        widget.valueText.Text = string_format(widget.format or "%.2f", value)
-        widget.valueText.Color = theme.muted
         widget.valueText.Size = 12
-        widget.valueText.Position = Vector2_new(widget.x + widget.w - 54, widget.y + 3)
+        widget.valueText.ZIndex = editingSlider and 58 or 54
+        if editingSlider then
+            widget.valueText.Text = asText(widget.editText) .. "|"
+            widget.valueText.Color = widget.editInvalid and theme.danger or theme.text
+            widget.valueText.Position = Vector2_new(editX + 5, widget.y + 3)
+            widget.editBox.Position = Vector2_new(editX, widget.y + 1)
+            widget.editBox.Size = Vector2_new(editW, 16)
+            widget.editBox.Color = theme.control2
+            widget.editBorder.Position = Vector2_new(editX, widget.y + 1)
+            widget.editBorder.Size = Vector2_new(editW, 16)
+            widget.editBorder.Color = widget.editInvalid and theme.danger or theme.accent
+            setVisible(widget.editBox, true)
+            setVisible(widget.editBorder, true)
+        else
+            widget.valueText.Text = displayValue
+            widget.valueText.Color = theme.muted
+            widget.valueText.Position = Vector2_new(widget.x + widget.w - 54, widget.y + 3)
+            setVisible(widget.editBox, false)
+            setVisible(widget.editBorder, false)
+        end
 
         widget.track.Position = Vector2_new(trackX, trackY)
         widget.track.Size = Vector2_new(trackW, trackH)
@@ -1599,10 +1826,10 @@ function MatchaGUI:Demo(opts)
         ConfigFolder = opts.ConfigFolder,
     })
 
-    gui:Tab("Legit")
-    gui:Tab("Ragebot")
-    gui:Tab("Visuals")
-    gui:Tab("Misc")
+    local legit = gui:Tab("Legit")
+    local ragebot = gui:Tab("Ragebot")
+    local visuals = gui:Tab("Visuals")
+    local misc = gui:Tab("Misc")
     local settings = gui:Tab("Settings")
 
     local configStatus
@@ -1660,6 +1887,93 @@ function MatchaGUI:Demo(opts)
             setStatus("Selected: " .. selectedConfigName())
         end
     end
+
+    local function changed(label)
+        return function(value)
+            setStatus(label .. ": " .. safeText(value))
+        end
+    end
+
+    local function comboChanged(label)
+        return function(index, text)
+            setStatus(label .. ": " .. safeText(text))
+        end
+    end
+
+    local function colorChanged(label)
+        return function()
+            setStatus(label .. " changed")
+        end
+    end
+
+    local function keyChanged(label)
+        return function(value, key)
+            if key then
+                setStatus(label .. ": " .. keyName(key))
+            else
+                setStatus(label .. ": " .. keyName(value))
+            end
+        end
+    end
+
+    local aimAssist = legit:Section("Aim Assist", "Left")
+    aimAssist:Toggle("legit_enabled", "Enabled", true, changed("Aim Enabled"))
+    aimAssist:SliderInt("legit_fov", "Field Of View", 0, 360, 90, changed("Field Of View"))
+    aimAssist:SliderFloat("legit_smooth", "Smoothing", 0, 20, 4, "%.1f", changed("Smoothing"))
+    aimAssist:SliderFloat("legit_curve", "Curve", 0, 1, 0, "%.2f", changed("Curve"))
+    aimAssist:Combo("legit_hitbox", "Hitbox", { "Head", "Chest", "Closest" }, 0, comboChanged("Hitbox"))
+
+    local trigger = legit:Section("Trigger", "Right")
+    trigger:Toggle("trigger_enabled", "Enabled", false, changed("Trigger Enabled"))
+    trigger:SliderInt("trigger_delay", "Delay", 0, 1000, 125, changed("Trigger Delay"))
+    trigger:SliderFloat("trigger_chance", "Chance", 0, 100, 72, "%.1f", changed("Trigger Chance"))
+    trigger:Keybind("trigger_key", "Trigger Key", 0x46, "hold", keyChanged("Trigger Key"))
+
+    local rageMain = ragebot:Section("Core", "Left")
+    rageMain:Toggle("rage_enabled", "Enabled", false, changed("Rage Enabled"))
+    rageMain:Toggle("rage_silent", "Silent Aim", false, changed("Silent Aim"))
+    rageMain:SliderInt("rage_hitchance", "Hit Chance", 0, 100, 75, changed("Hit Chance"))
+    rageMain:SliderInt("rage_min_damage", "Min Damage", 0, 130, 35, changed("Min Damage"))
+    rageMain:Combo("rage_priority", "Priority", { "Damage", "Accuracy", "Speed" }, 0, comboChanged("Priority"))
+
+    local rageAntiAim = ragebot:Section("Anti Aim", "Right")
+    rageAntiAim:Toggle("aa_enabled", "Enabled", false, changed("Anti Aim"))
+    rageAntiAim:SliderInt("aa_yaw", "Yaw Offset", -180, 180, 0, changed("Yaw Offset"))
+    rageAntiAim:SliderInt("aa_jitter", "Jitter", 0, 90, 20, changed("Jitter"))
+    rageAntiAim:SliderFloat("aa_spin", "Spin Speed", 0, 30, 8, "%.1f", changed("Spin Speed"))
+
+    local esp = visuals:Section("ESP", "Left")
+    esp:Toggle("esp_enabled", "Enabled", true, changed("ESP Enabled"))
+    esp:Toggle("esp_boxes", "Boxes", true, changed("Boxes"))
+    esp:Toggle("esp_names", "Names", true, changed("Names"))
+    esp:SliderInt("esp_distance", "Max Distance", 100, 10000, 2500, changed("Max Distance"))
+    esp:SliderInt("esp_text_size", "Text Size", 8, 32, 13, changed("Text Size"))
+    esp:ColorPicker("esp_color", "ESP Color", 255, 255, 255, 255, colorChanged("ESP Color"))
+
+    local world = visuals:Section("World", "Right")
+    world:Toggle("world_fullbright", "Fullbright", false, changed("Fullbright"))
+    world:Toggle("world_chams", "Chams", false, changed("Chams"))
+    world:SliderFloat("world_render_radius", "Render Radius", 0, 5000, 1200, "%.1f", changed("Render Radius"))
+    world:SliderInt("world_fov", "Camera FOV", 40, 120, 70, changed("Camera FOV"))
+    world:ColorPicker("world_accent", "World Accent", 69, 23, 255, 255, colorChanged("World Accent"))
+
+    local movement = misc:Section("Movement", "Left")
+    movement:Toggle("bhop_enabled", "Bunny Hop", false, changed("Bunny Hop"))
+    movement:Toggle("auto_strafe", "Auto Strafe", false, changed("Auto Strafe"))
+    movement:SliderInt("walk_speed", "Walk Speed", 16, 250, 16, changed("Walk Speed"))
+    movement:SliderFloat("jump_power", "Jump Power", 0, 200, 50, "%.1f", changed("Jump Power"))
+    movement:Keybind("movement_key", "Movement Key", 0x47, "toggle", keyChanged("Movement Key"))
+
+    local demoTools = misc:Section("Demo Tools", "Right")
+    demoTools:Toggle("demo_toggle", "Demo Toggle", true, changed("Demo Toggle"))
+    demoTools:InputText("demo_text", "Demo Text", "type here", changed("Demo Text"))
+    demoTools:Combo("demo_combo", "Demo Combo", { "First", "Second", "Third" }, 1, comboChanged("Demo Combo"))
+    demoTools:Button("Print Values", function()
+        setStatus("Values printed")
+        print("Aim FOV: " .. safeText(gui:GetValue("legit_fov")))
+        print("Walk Speed: " .. safeText(gui:GetValue("walk_speed")))
+        print("Demo Text: " .. safeText(gui:GetValue("demo_text")))
+    end)
 
     local createConfigs = settings:Section("Create Configs", "Left")
     createConfigs:InputText("config_name", "Name", "", nil, { skipConfig = true })
@@ -1728,7 +2042,7 @@ function MatchaGUI:Demo(opts)
     other:Toggle("show_keybinds", "Show Keybinds", false)
     other:MenuKeybind("menu_key", "Menu Key", 0x70)
 
-    gui:SetTab("Settings")
+    gui:SetTab(opts.Tab or "Legit")
     refreshStatus()
 
     if opts.Start ~= false then
