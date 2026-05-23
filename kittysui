@@ -3,7 +3,6 @@
 -- Same architecture as MatchaGUI (config save/load, keybinds, slider editing,
 -- dragging, hotkeys), restyled to match the universal-style look:
 -- left icon sidebar, top sub-tabs, square checkboxes, sharp corners.
--- loadstring(game:HttpGet("https://raw.githubusercontent.com/Aughhhhhhh/MyUI/refs/heads/main/kittysui",true))()
 
 local VenusGUI = {}
 
@@ -1524,8 +1523,11 @@ function Window:_layoutTabs()
     for _, tab in ipairs(self._tabs) do
         local isActiveTab = tab == activeTab and self.visible
         for _, page in ipairs(tab.pages) do
+            local isActivePage = isActiveTab and (tab._activePage == page)
             if not isActiveTab then
                 hidePage(page)
+            end
+            if not isActivePage then
                 for _, section in ipairs(page.sections) do
                     hideSection(section)
                     for _, widget in ipairs(section.widgets) do hideWidget(widget) end
