@@ -124,7 +124,9 @@ local NOTIFY_MARGIN   = 14
 local NOTIFY_GAP      = 8
 local NOTIFY_ENTER    = 0.28
 local NOTIFY_EXIT     = 0.22
-local NOTIFY_Z_BASE   = 200
+local NOTIFY_Z_BASE   = 130
+local NOTIFY_FALLBACK_W = 1920
+local NOTIFY_FALLBACK_H = 1080
 
 local function copyTheme(overrides)
     local theme = {}
@@ -1835,7 +1837,10 @@ function Window:Step(dt)
     self:_layoutTabs()
     self:_layoutSections()
     self:_applyVisibility()
-    self:_stepNotifications(dt)
+    local ok, err = pcall(function() self:_stepNotifications(dt) end)
+    if not ok then
+        print("[cloud] notification step error: " .. tostring(err))
+    end
 end
 
 function Window:Pulse(seconds)
@@ -1863,38 +1868,40 @@ local function makeNotifyDrawing(window, typ, props, z)
     local obj = Drawing_new(typ)
     if props then
         for k, v in pairs(props) do
-            obj[k] = v
+            pcall(function() obj[k] = v end)
         end
     end
-    if z then obj.ZIndex = z end
-    obj.Visible = false
+    if z then
+        pcall(function() obj.ZIndex = z end)
+    end
+    pcall(function() obj.Visible = false end)
     table.insert(window._notifyDrawings, obj)
     return obj
 end
 
 local function getViewportSize(window)
-    local w, h = 1920, 1080
-    local ok, players = pcall(function()
-        return game:GetService("Players")
-    end)
-    if ok and players then
-        local okPlayer, lp = pcall(function() return players.LocalPlayer end)
-        if okPlayer and lp then
-            local okCam, cam = pcall(function()
-                return workspace and workspace.CurrentCamera
-            end)
-            if okCam and cam then
-                local okSize, size = pcall(function() return cam.ViewportSize end)
-                if okSize and size and size.X and size.Y then
-                    return size.X, size.Y
+    if window then
+        local ok, cam = pcall(function()
+            return workspace and workspace.CurrentCamera
+        end)
+        if ok and cam then
+            local okSize, size = pcall(function() return cam.ViewportSize end)
+            if okSize and size then
+                local sx, sy
+                pcall(function() sx = size.X; sy = size.Y end)
+                if type(sx) == "number" and type(sy) == "number" and sx > 0 and sy > 0 then
+                    window._lastViewport = window._lastViewport or {}
+                    window._lastViewport.x = sx
+                    window._lastViewport.y = sy
+                    return sx, sy
                 end
             end
         end
+        if window._lastViewport then
+            return window._lastViewport.x, window._lastViewport.y
+        end
     end
-    if window and window._lastViewport then
-        return window._lastViewport.x, window._lastViewport.y
-    end
-    return w, h
+    return NOTIFY_FALLBACK_W, NOTIFY_FALLBACK_H
 end
 
 function Window:_buildNotificationSlot()
@@ -1932,12 +1939,12 @@ end
 local function releaseNotificationSlot(slot)
     if not slot then return end
     slot.inUse = false
-    setVisible(slot.panel, false)
-    setVisible(slot.accent, false)
-    setVisible(slot.outline, false)
-    setVisible(slot.progress, false)
-    setVisible(slot.title, false)
-    setVisible(slot.body, false)
+    pcall(function() slot.panel.Visible = false end)
+    pcall(function() slot.accent.Visible = false end)
+    pcall(function() slot.outline.Visible = false end)
+    pcall(function() slot.progress.Visible = false end)
+    pcall(function() slot.title.Visible = false end)
+    pcall(function() slot.body.Visible = false end)
 end
 
 function Window:Notify(message, opts)
@@ -2013,16 +2020,12 @@ function Window:_stepNotifications(dt)
 
     local now = os_clock()
     local viewW, viewH = getViewportSize(self)
-    self._lastViewport = self._lastViewport or {}
-    self._lastViewport.x = viewW
-    self._lastViewport.y = viewH
 
     local theme = self.theme
     local panelColor = theme.panel
     local outlineColor = theme.stroke2
     local titleColor = theme.text
     local bodyColor = theme.muted
-    local trackColor = theme.stroke
 
     -- Update lifecycle (mark expired entries for exit, drop fully gone ones)
     local i = 1
@@ -2057,7 +2060,6 @@ function Window:_stepNotifications(dt)
         if entry.currentY == nil then
             entry.currentY = stackY
         else
-            -- Smooth shift toward target when neighbors above leave
             local shift = (entry.targetY - entry.currentY) * 0.25
             if math.abs(shift) < 0.5 then
                 entry.currentY = entry.targetY
@@ -2066,23 +2068,17 @@ function Window:_stepNotifications(dt)
             end
         end
 
-        local progress
-        local exiting = false
+        local enterT = 1
+        local offsetX = 0
         if entry.state == "enter" then
-            progress = easeOutCubic((now - entry.stateStart) / NOTIFY_ENTER)
-            entry.alpha = progress
-            entry.offsetX = math_floor((1 - progress) * (NOTIFY_WIDTH + NOTIFY_MARGIN))
+            enterT = easeOutCubic((now - entry.stateStart) / NOTIFY_ENTER)
+            offsetX = math_floor((1 - enterT) * (NOTIFY_WIDTH + NOTIFY_MARGIN))
         elseif entry.state == "exit" then
-            exiting = true
             local p = easeInCubic((now - entry.stateStart) / NOTIFY_EXIT)
-            entry.alpha = 1 - p
-            entry.offsetX = math_floor(p * (NOTIFY_WIDTH + NOTIFY_MARGIN))
-        else
-            entry.alpha = 1
-            entry.offsetX = 0
+            offsetX = math_floor(p * (NOTIFY_WIDTH + NOTIFY_MARGIN))
         end
 
-        local x = math_floor(baseX + entry.offsetX)
+        local x = math_floor(baseX + offsetX)
         local y = math_floor(entry.currentY)
 
         local slot = entry.slot
@@ -2093,65 +2089,63 @@ function Window:_stepNotifications(dt)
         local title    = slot.title
         local body     = slot.body
 
-        local visible = entry.alpha > 0.02
+        local zBase = NOTIFY_Z_BASE + (index * 6)
 
-        setVisible(panel, visible)
-        setVisible(accent, visible)
-        setVisible(outline, visible)
-        setVisible(progBar, visible)
-        setVisible(title, visible)
-        setVisible(body, visible)
-
-        if visible then
-            local trans = entry.alpha
-            local zBase = NOTIFY_Z_BASE + (index * 6)
-
+        pcall(function()
             panel.Position = Vector2_new(x, y)
             panel.Size = Vector2_new(NOTIFY_WIDTH, NOTIFY_HEIGHT)
             panel.Color = panelColor
-            panel.Transparency = trans
             panel.ZIndex = zBase + 1
+            panel.Visible = true
+        end)
 
+        pcall(function()
             accent.Position = Vector2_new(x, y)
             accent.Size = Vector2_new(3, NOTIFY_HEIGHT)
             accent.Color = entry.accent
-            accent.Transparency = trans
             accent.ZIndex = zBase + 2
+            accent.Visible = true
+        end)
 
+        pcall(function()
             outline.Position = Vector2_new(x, y)
             outline.Size = Vector2_new(NOTIFY_WIDTH, NOTIFY_HEIGHT)
             outline.Color = outlineColor
-            outline.Transparency = trans
             outline.ZIndex = zBase + 3
+            outline.Visible = true
+        end)
 
-            -- Progress bar (full track + draining fill)
-            local trackY = y + NOTIFY_HEIGHT - 2
-            local trackW = NOTIFY_WIDTH - 4
-            local pct = 0
-            if not exiting and entry.duration > 0 then
-                local remaining = entry.dismissAt - now
-                pct = clamp(remaining / entry.duration, 0, 1)
-            end
-            local fillW = math_max(2, math_floor(trackW * pct))
+        local pct = 0
+        if entry.state ~= "exit" and entry.duration > 0 then
+            local remaining = entry.dismissAt - now
+            pct = clamp(remaining / entry.duration, 0, 1)
+        end
+        local trackW = NOTIFY_WIDTH - 4
+        local fillW = math_max(2, math_floor(trackW * pct))
 
-            progBar.Position = Vector2_new(x + 2, trackY)
+        pcall(function()
+            progBar.Position = Vector2_new(x + 2, y + NOTIFY_HEIGHT - 2)
             progBar.Size = Vector2_new(fillW, 2)
             progBar.Color = entry.accent
-            progBar.Transparency = trans
             progBar.ZIndex = zBase + 4
+            progBar.Visible = true
+        end)
 
+        pcall(function()
             title.Text = entry.title
             title.Position = Vector2_new(x + 12, y + 7)
             title.Color = titleColor
-            title.Transparency = trans
             title.ZIndex = zBase + 5
+            title.Visible = true
+        end)
 
+        pcall(function()
             body.Text = entry.message
             body.Position = Vector2_new(x + 12, y + 26)
             body.Color = bodyColor
-            body.Transparency = trans
             body.ZIndex = zBase + 5
-        end
+            body.Visible = true
+        end)
 
         stackY = stackY + NOTIFY_HEIGHT + NOTIFY_GAP
     end
@@ -2318,6 +2312,19 @@ function MatchaGUI:Demo(opts)
     movement:Keybind("movement_key", "Movement Key", 0x47, "toggle", keyChanged("Movement Key"))
 
     local demoTools = misc:Section("Demo Tools", "Right")
+    demoTools:Button("Test Notification", function()
+        print("[cloud] Test Notification button fired")
+        local entry = gui:Notify("If you can read this, drawing works.", {
+            type = "success",
+            title = "Test Notification",
+            duration = 5,
+        })
+        print("[cloud] Notify returned: " .. tostring(entry))
+        print("[cloud] active count: " .. tostring(#gui._notifications))
+        if entry and entry.slot and entry.slot.panel then
+            print("[cloud] slot panel: " .. tostring(entry.slot.panel))
+        end
+    end)
     demoTools:Toggle("demo_toggle", "Demo Toggle", true, changed("Demo Toggle"))
     demoTools:InputText("demo_text", "Demo Text", "type here", changed("Demo Text"))
     demoTools:Combo("demo_combo", "Demo Combo", { "First", "Second", "Third" }, 1, comboChanged("Demo Combo"))
