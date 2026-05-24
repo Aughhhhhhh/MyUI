@@ -2189,12 +2189,19 @@ function MatchaGUI:Demo(opts)
         return name
     end
 
-    local function setStatus(text)
+    local function setStatus(text, kind, opts)
         text = safeText(text)
         if configStatus then
             configStatus.label = text
         end
         print(text)
+        if gui and gui.Notify then
+            gui:Notify(text, {
+                type = kind or "info",
+                title = (opts and opts.title) or NOTIFY_TITLES[kind or "info"],
+                duration = opts and opts.duration or nil,
+            })
+        end
     end
 
     local function selectedConfigName()
@@ -2232,28 +2239,32 @@ function MatchaGUI:Demo(opts)
 
     local function changed(label)
         return function(value)
-            setStatus(label .. ": " .. safeText(value))
+            local kind = "info"
+            if type(value) == "boolean" then
+                kind = value and "success" or "info"
+            end
+            setStatus(label .. ": " .. safeText(value), kind)
         end
     end
 
     local function comboChanged(label)
         return function(index, text)
-            setStatus(label .. ": " .. safeText(text))
+            setStatus(label .. ": " .. safeText(text), "info")
         end
     end
 
     local function colorChanged(label)
         return function()
-            setStatus(label .. " changed")
+            setStatus(label .. " changed", "info")
         end
     end
 
     local function keyChanged(label)
         return function(value, key)
             if key then
-                setStatus(label .. ": " .. keyName(key))
+                setStatus(label .. ": " .. keyName(key), "info")
             else
-                setStatus(label .. ": " .. keyName(value))
+                setStatus(label .. ": " .. keyName(value), "info")
             end
         end
     end
@@ -2311,7 +2322,7 @@ function MatchaGUI:Demo(opts)
     demoTools:InputText("demo_text", "Demo Text", "type here", changed("Demo Text"))
     demoTools:Combo("demo_combo", "Demo Combo", { "First", "Second", "Third" }, 1, comboChanged("Demo Combo"))
     demoTools:Button("Print Values", function()
-        setStatus("Values printed")
+        setStatus("Values printed", "info")
         print("Aim FOV: " .. safeText(gui:GetValue("legit_fov")))
         print("Walk Speed: " .. safeText(gui:GetValue("walk_speed")))
         print("Demo Text: " .. safeText(gui:GetValue("demo_text")))
@@ -2335,11 +2346,11 @@ function MatchaGUI:Demo(opts)
         local name = configName()
         local ok, msg = gui:SaveConfig(name)
         if ok then
-            setStatus("Saved config: " .. msg)
+            setStatus("Saved config: " .. msg, "success")
             refreshStatus()
             selectConfig(name)
         else
-            setStatus("Save failed: " .. tostring(msg))
+            setStatus("Save failed: " .. tostring(msg), "error")
         end
     end)
 
@@ -2356,30 +2367,30 @@ function MatchaGUI:Demo(opts)
         local name = selectedConfigName()
         local ok, msg = gui:LoadConfig(name)
         if ok then
-            setStatus("Loaded config: " .. name)
+            setStatus("Loaded config: " .. name, "success")
         else
-            setStatus("Load failed: " .. tostring(msg))
+            setStatus("Load failed: " .. tostring(msg), "error")
         end
     end)
     configSettings:Button("Update", function()
         local name = selectedConfigName()
         local ok, msg = gui:SaveConfig(name)
         if ok then
-            setStatus("Updated config: " .. msg)
+            setStatus("Updated config: " .. msg, "success")
             refreshStatus()
             selectConfig(name)
         else
-            setStatus("Update failed: " .. tostring(msg))
+            setStatus("Update failed: " .. tostring(msg), "error")
         end
     end)
     configSettings:Button("Delete", function()
         local name = selectedConfigName()
         local ok, msg = gui:DeleteConfig(name)
         if ok then
-            setStatus("Deleted config: " .. msg)
+            setStatus("Deleted config: " .. msg, "warning")
             refreshStatus()
         else
-            setStatus("Delete failed: " .. tostring(msg))
+            setStatus("Delete failed: " .. tostring(msg), "error")
         end
     end)
     configSettings:Button("Refresh", function()
