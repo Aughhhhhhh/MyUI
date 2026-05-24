@@ -104,6 +104,28 @@ local COLOR_PALETTE = {
     Color3_fromRGB(240, 142, 214),
 }
 
+local NOTIFY_COLORS = {
+    info    = Color3_fromRGB(80, 145, 255),
+    success = Color3_fromRGB(64, 205, 132),
+    warning = Color3_fromRGB(255, 188, 58),
+    error   = Color3_fromRGB(233, 70, 70),
+}
+
+local NOTIFY_TITLES = {
+    info    = "Info",
+    success = "Success",
+    warning = "Warning",
+    error   = "Error",
+}
+
+local NOTIFY_WIDTH    = 280
+local NOTIFY_HEIGHT   = 56
+local NOTIFY_MARGIN   = 14
+local NOTIFY_GAP      = 8
+local NOTIFY_ENTER    = 0.28
+local NOTIFY_EXIT     = 0.22
+local NOTIFY_Z_BASE   = 200
+
 local function copyTheme(overrides)
     local theme = {}
     for k, v in pairs(DEFAULT_THEME) do
@@ -524,6 +546,8 @@ function MatchaGUI.Create(opts)
     self._running = false
     self._connection = nil
     self._destroyed = false
+    self._notifications = {}
+    self._notifyDrawings = {}
 
     self.shadow = makeBox(self, self.theme.shadow, 45)
     self.root = makeBox(self, self.theme.bg, 50)
@@ -1064,6 +1088,12 @@ function Window:Destroy()
         task.defer(function()
             pcall(function() conn:Disconnect() end)
         end)
+    end
+    if self._notifications then
+        table.clear(self._notifications)
+    end
+    if self._notifyDrawings then
+        removeAll(self._notifyDrawings)
     end
     removeAll(self._drawings)
 end
@@ -1805,6 +1835,7 @@ function Window:Step(dt)
     self:_layoutTabs()
     self:_layoutSections()
     self:_applyVisibility()
+    self:_stepNotifications(dt)
 end
 
 function Window:Pulse(seconds)
@@ -1812,6 +1843,317 @@ function Window:Pulse(seconds)
     while os_clock() < untilTime do
         self:Step(0)
         task.wait()
+    end
+end
+
+local function easeOutCubic(t)
+    if t <= 0 then return 0 end
+    if t >= 1 then return 1 end
+    local inv = 1 - t
+    return 1 - inv * inv * inv
+end
+
+local function easeInCubic(t)
+    if t <= 0 then return 0 end
+    if t >= 1 then return 1 end
+    return t * t * t
+end
+
+local function makeNotifyDrawing(window, typ, props, z)
+    local obj = Drawing_new(typ)
+    if props then
+        for k, v in pairs(props) do
+            obj[k] = v
+        end
+    end
+    if z then obj.ZIndex = z end
+    obj.Visible = false
+    table.insert(window._notifyDrawings, obj)
+    return obj
+end
+
+local function getViewportSize(window)
+    local w, h = 1920, 1080
+    local ok, players = pcall(function()
+        return game:GetService("Players")
+    end)
+    if ok and players then
+        local okPlayer, lp = pcall(function() return players.LocalPlayer end)
+        if okPlayer and lp then
+            local okCam, cam = pcall(function()
+                return workspace and workspace.CurrentCamera
+            end)
+            if okCam and cam then
+                local okSize, size = pcall(function() return cam.ViewportSize end)
+                if okSize and size and size.X and size.Y then
+                    return size.X, size.Y
+                end
+            end
+        end
+    end
+    if window and window._lastViewport then
+        return window._lastViewport.x, window._lastViewport.y
+    end
+    return w, h
+end
+
+function Window:_buildNotificationSlot()
+    local accentBar  = makeNotifyDrawing(self, "Square", { Filled = true,  Thickness = 1 }, NOTIFY_Z_BASE + 2)
+    local panel      = makeNotifyDrawing(self, "Square", { Filled = true,  Thickness = 1 }, NOTIFY_Z_BASE + 1)
+    local outline    = makeNotifyDrawing(self, "Square", { Filled = false, Thickness = 1 }, NOTIFY_Z_BASE + 3)
+    local progress   = makeNotifyDrawing(self, "Square", { Filled = true,  Thickness = 1 }, NOTIFY_Z_BASE + 3)
+    local titleText  = makeNotifyDrawing(self, "Text",   { Size = 13, Font = FONT_BOLD, Center = false, Outline = false }, NOTIFY_Z_BASE + 4)
+    local bodyText   = makeNotifyDrawing(self, "Text",   { Size = 12, Font = FONT,      Center = false, Outline = false }, NOTIFY_Z_BASE + 4)
+
+    return {
+        panel = panel,
+        accent = accentBar,
+        outline = outline,
+        progress = progress,
+        title = titleText,
+        body = bodyText,
+    }
+end
+
+function Window:_acquireNotificationSlot()
+    if not self._notifySlots then self._notifySlots = {} end
+    for _, slot in ipairs(self._notifySlots) do
+        if not slot.inUse then
+            slot.inUse = true
+            return slot
+        end
+    end
+    local slot = self:_buildNotificationSlot()
+    slot.inUse = true
+    table.insert(self._notifySlots, slot)
+    return slot
+end
+
+local function releaseNotificationSlot(slot)
+    if not slot then return end
+    slot.inUse = false
+    setVisible(slot.panel, false)
+    setVisible(slot.accent, false)
+    setVisible(slot.outline, false)
+    setVisible(slot.progress, false)
+    setVisible(slot.title, false)
+    setVisible(slot.body, false)
+end
+
+function Window:Notify(message, opts)
+    if self._destroyed then return end
+    opts = opts or {}
+
+    local kind = opts.type or opts.kind or "info"
+    if not NOTIFY_COLORS[kind] then kind = "info" end
+
+    local title = opts.title
+    if title == nil or title == "" then
+        title = NOTIFY_TITLES[kind]
+    end
+
+    local duration = tonumber(opts.duration) or 4
+
+    local slot = self:_acquireNotificationSlot()
+    local entry = {
+        slot = slot,
+        kind = kind,
+        title = asText(title),
+        message = asText(message),
+        accent = opts.color or NOTIFY_COLORS[kind],
+        duration = duration,
+        born = os_clock(),
+        dismissAt = os_clock() + duration,
+        targetY = 0,
+        currentY = nil,
+        state = "enter",
+        stateStart = os_clock(),
+        alpha = 0,
+        offsetX = 0,
+    }
+
+    table.insert(self._notifications, entry)
+    return entry
+end
+
+function Window:NotifyInfo(message, opts)
+    opts = opts or {}
+    opts.type = "info"
+    return self:Notify(message, opts)
+end
+
+function Window:NotifySuccess(message, opts)
+    opts = opts or {}
+    opts.type = "success"
+    return self:Notify(message, opts)
+end
+
+function Window:NotifyWarning(message, opts)
+    opts = opts or {}
+    opts.type = "warning"
+    return self:Notify(message, opts)
+end
+
+function Window:NotifyError(message, opts)
+    opts = opts or {}
+    opts.type = "error"
+    return self:Notify(message, opts)
+end
+
+function Window:ClearNotifications()
+    if not self._notifications then return end
+    for _, entry in ipairs(self._notifications) do
+        releaseNotificationSlot(entry.slot)
+    end
+    table.clear(self._notifications)
+end
+
+function Window:_stepNotifications(dt)
+    if not self._notifications then return end
+
+    local now = os_clock()
+    local viewW, viewH = getViewportSize(self)
+    self._lastViewport = self._lastViewport or {}
+    self._lastViewport.x = viewW
+    self._lastViewport.y = viewH
+
+    local theme = self.theme
+    local panelColor = theme.panel
+    local outlineColor = theme.stroke2
+    local titleColor = theme.text
+    local bodyColor = theme.muted
+    local trackColor = theme.stroke
+
+    -- Update lifecycle (mark expired entries for exit, drop fully gone ones)
+    local i = 1
+    while i <= #self._notifications do
+        local entry = self._notifications[i]
+
+        if entry.state == "enter" and (now - entry.stateStart) >= NOTIFY_ENTER then
+            entry.state = "show"
+            entry.stateStart = now
+        end
+
+        if entry.state ~= "exit" and now >= entry.dismissAt then
+            entry.state = "exit"
+            entry.stateStart = now
+        end
+
+        if entry.state == "exit" and (now - entry.stateStart) >= NOTIFY_EXIT then
+            releaseNotificationSlot(entry.slot)
+            table.remove(self._notifications, i)
+        else
+            i = i + 1
+        end
+    end
+
+    -- Layout from top-right downward
+    local baseX = viewW - NOTIFY_WIDTH - NOTIFY_MARGIN
+    local baseY = NOTIFY_MARGIN
+    local stackY = baseY
+
+    for index, entry in ipairs(self._notifications) do
+        entry.targetY = stackY
+        if entry.currentY == nil then
+            entry.currentY = stackY
+        else
+            -- Smooth shift toward target when neighbors above leave
+            local shift = (entry.targetY - entry.currentY) * 0.25
+            if math.abs(shift) < 0.5 then
+                entry.currentY = entry.targetY
+            else
+                entry.currentY = entry.currentY + shift
+            end
+        end
+
+        local progress
+        local exiting = false
+        if entry.state == "enter" then
+            progress = easeOutCubic((now - entry.stateStart) / NOTIFY_ENTER)
+            entry.alpha = progress
+            entry.offsetX = math_floor((1 - progress) * (NOTIFY_WIDTH + NOTIFY_MARGIN))
+        elseif entry.state == "exit" then
+            exiting = true
+            local p = easeInCubic((now - entry.stateStart) / NOTIFY_EXIT)
+            entry.alpha = 1 - p
+            entry.offsetX = math_floor(p * (NOTIFY_WIDTH + NOTIFY_MARGIN))
+        else
+            entry.alpha = 1
+            entry.offsetX = 0
+        end
+
+        local x = math_floor(baseX + entry.offsetX)
+        local y = math_floor(entry.currentY)
+
+        local slot = entry.slot
+        local panel    = slot.panel
+        local accent   = slot.accent
+        local outline  = slot.outline
+        local progBar  = slot.progress
+        local title    = slot.title
+        local body     = slot.body
+
+        local visible = entry.alpha > 0.02
+
+        setVisible(panel, visible)
+        setVisible(accent, visible)
+        setVisible(outline, visible)
+        setVisible(progBar, visible)
+        setVisible(title, visible)
+        setVisible(body, visible)
+
+        if visible then
+            local trans = entry.alpha
+            local zBase = NOTIFY_Z_BASE + (index * 6)
+
+            panel.Position = Vector2_new(x, y)
+            panel.Size = Vector2_new(NOTIFY_WIDTH, NOTIFY_HEIGHT)
+            panel.Color = panelColor
+            panel.Transparency = trans
+            panel.ZIndex = zBase + 1
+
+            accent.Position = Vector2_new(x, y)
+            accent.Size = Vector2_new(3, NOTIFY_HEIGHT)
+            accent.Color = entry.accent
+            accent.Transparency = trans
+            accent.ZIndex = zBase + 2
+
+            outline.Position = Vector2_new(x, y)
+            outline.Size = Vector2_new(NOTIFY_WIDTH, NOTIFY_HEIGHT)
+            outline.Color = outlineColor
+            outline.Transparency = trans
+            outline.ZIndex = zBase + 3
+
+            -- Progress bar (full track + draining fill)
+            local trackY = y + NOTIFY_HEIGHT - 2
+            local trackW = NOTIFY_WIDTH - 4
+            local pct = 0
+            if not exiting and entry.duration > 0 then
+                local remaining = entry.dismissAt - now
+                pct = clamp(remaining / entry.duration, 0, 1)
+            end
+            local fillW = math_max(2, math_floor(trackW * pct))
+
+            progBar.Position = Vector2_new(x + 2, trackY)
+            progBar.Size = Vector2_new(fillW, 2)
+            progBar.Color = entry.accent
+            progBar.Transparency = trans
+            progBar.ZIndex = zBase + 4
+
+            title.Text = entry.title
+            title.Position = Vector2_new(x + 12, y + 7)
+            title.Color = titleColor
+            title.Transparency = trans
+            title.ZIndex = zBase + 5
+
+            body.Text = entry.message
+            body.Position = Vector2_new(x + 12, y + 26)
+            body.Color = bodyColor
+            body.Transparency = trans
+            body.ZIndex = zBase + 5
+        end
+
+        stackY = stackY + NOTIFY_HEIGHT + NOTIFY_GAP
     end
 end
 
@@ -1973,6 +2315,18 @@ function MatchaGUI:Demo(opts)
         print("Aim FOV: " .. safeText(gui:GetValue("legit_fov")))
         print("Walk Speed: " .. safeText(gui:GetValue("walk_speed")))
         print("Demo Text: " .. safeText(gui:GetValue("demo_text")))
+    end)
+    demoTools:Button("Notify: Info", function()
+        gui:NotifyInfo("This is an info notification.")
+    end)
+    demoTools:Button("Notify: Success", function()
+        gui:NotifySuccess("Operation completed.", { title = "All good" })
+    end)
+    demoTools:Button("Notify: Warning", function()
+        gui:NotifyWarning("Heads up — something looks off.")
+    end)
+    demoTools:Button("Notify: Error", function()
+        gui:NotifyError("Something went wrong.", { duration = 6 })
     end)
 
     local createConfigs = settings:Section("Create Configs", "Left")
